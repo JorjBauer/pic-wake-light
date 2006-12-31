@@ -1,0 +1,1 @@
+	EXTERN	delay_ms
