@@ -8,10 +8,17 @@
         EXTERN  temp1
         EXTERN  temp2
 
+	EXTERN time_current
 	EXTERN tens_hours
 	EXTERN ones_hours
 	EXTERN tens_minutes
 	EXTERN ones_minutes
 	EXTERN tens_seconds
 	EXTERN ones_seconds
+
+	EXTERN time_alarm
+	EXTERN tens_alarm_hours
+	EXTERN ones_alarm_hours
+	EXTERN tens_alarm_minutes
+	EXTERN ones_alarm_minutes
 
