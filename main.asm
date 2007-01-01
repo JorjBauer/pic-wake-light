@@ -8,7 +8,7 @@
         
 	include		"delay.inc"
 
-	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _INTRC_OSC_NOCLKOUT )
+	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _XT_OSC )
 
 	;; first version of this used _INTRC_OSC_NOCLKOUT. Now trying _XT_OSC or _LP_OSC
 	
@@ -19,16 +19,11 @@ _InitVector	set	0x04
 ;;; *
 ;;; * TIMING ERROR NOTES
 ;;; *
-;;; *   We're counting 59.779459-ish seconds per minute. That's 3586.77-ish
-;;; *   seconds per hour, so we need to make up 13-ish seconds an hour. or
-;;; *   we can count sub-seconds per minute, and set the prescalar lower...
-;;; *
-;;; *   ... but instead of that, we're just going to add 13 seconds to the
-;;; *   start of every hour. Which will leave us 5.57904 seconds short on a
-;;; *   day. So once a day, we'll add 5. We'll drift about 2 minutes a month.
-;;; *   Not fantastic, but tolerable.
+;;; * prescalar of 1:16 on a 2MHz clock, where we cycle every 250 instead
+;;; * of 256 segments, gives us 125 interrupts per second.
 ;;; ************************************************************************
-	
+#define INTERRUPTS_PER_SECOND 0x7D
+		
 
 ;;; ************************************************************************
         udata
@@ -99,14 +94,15 @@ done_int:
 INT_TMR0:
 	bcf	INTCON, T0IF	; turn off interrupt flag
 
-	;; add 6 spare cycles to TMR0 (decreasing its length a bit).
-	;; This makes our 37MHz frequency divisible by 250 (rather than 256).
+	;; add 6 spare cycles to TMR0 (decreasing its length a bit) because
+	;; the clock freq isn't evenly divisible by 256 (into a second), but
+	;; works fine if we divide by 250.
 	movlw	0x06
 	addwf	TMR0, F
 	
 	incf	tmrcnt, F
 	movfw	tmrcnt
-	xorlw	0x25		; 37 interrupts per second.
+	xorlw	INTERRUPTS_PER_SECOND
 	skpz
 	goto	check_int	; not time yet! Finish up.
 
@@ -352,10 +348,10 @@ Main:
         movlw   TRISB_DATA
         movwf   TRISB
 	bcf	PCON, OSCF	; set internal oscillator to 37kHz
-	bsf	OPTION_REG, PSA	; assign prescalar to WDT, makes prescalar for TMR0 1:1
-;;; 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 001 for 1:4; that means about
-;;; 	bcf	OPTION_REG, PS1	;   9 interrupts per second (9.033, give
-;;; 	bsf	OPTION_REG, PS0	;   take based on 37kHz clock).
+	bcf	OPTION_REG, PSA	; assign prescalar to TMR0
+ 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 011 for 1:16
+ 	bsf	OPTION_REG, PS1	
+ 	bsf	OPTION_REG, PS0	
 	
 	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
 
@@ -397,6 +393,10 @@ Main:
 	movwf	ones_alarm_hours
 	clrf	tens_alarm_minutes
 	clrf	ones_alarm_minutes
+
+	;; set the default error rate
+	clrf	tens_error
+	clrf	ones_error
 
 	movlw	0x0C		; 'C' for 'Current'
 	movwf	time_current
