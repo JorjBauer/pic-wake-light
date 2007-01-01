@@ -22,3 +22,7 @@
 	EXTERN tens_alarm_minutes
 	EXTERN ones_alarm_minutes
 
+	EXTERN	time_error
+	EXTERN	tens_error
+	EXTERN	ones_error
+

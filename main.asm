@@ -10,6 +10,8 @@
 
 	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _INTRC_OSC_NOCLKOUT )
 
+	;; first version of this used _INTRC_OSC_NOCLKOUT. Now trying _XT_OSC or _LP_OSC
+	
 _ResetVector	set	0x00
 _InitVector	set	0x04
 
@@ -41,7 +43,9 @@ brightness	res	1	; 4-bit value for brightness of LED
 pulsate		res	1	; information on pulsate status
 
 mode		res	1	; current mode-button setting
-	
+
+alarming	res	1	; alarm state
+		
 ;;; ************************************************************************
         code
 
@@ -95,9 +99,14 @@ done_int:
 INT_TMR0:
 	bcf	INTCON, T0IF	; turn off interrupt flag
 
+	;; add 6 spare cycles to TMR0 (decreasing its length a bit).
+	;; This makes our 37MHz frequency divisible by 250 (rather than 256).
+	movlw	0x06
+	addwf	TMR0, F
+	
 	incf	tmrcnt, F
 	movfw	tmrcnt
-	xorlw	9		; 9 interrupts per second
+	xorlw	0x25		; 37 interrupts per second.
 	skpz
 	goto	check_int	; not time yet! Finish up.
 
@@ -124,15 +133,25 @@ pulsate_down:
 	sublw	0
 	skpz
 	goto	decrease_brightness
-	bcf	pulsate, 0	; set to pulsate up next time, and fall thru...
+	bcf	pulsate, 0	; set to pulsate up next time
+	return
 pulsate_up:
 	movfw	brightness
 	sublw	0x0F
 	skpz
 	goto	increase_brightness
 	bsf	pulsate, 0	; set to pulsate down next time
-	goto	pulsate_down	; loop back to do the down thing
+	return
+
+;;; ************************************************************************
+;;; *
+;;; * turn off the LED and reset brightness counter.
 	
+turn_off_led:
+	clrf	brightness
+	clrf	PORTA
+	return
+		
 ;;; ************************************************************************
 ;;; *
 ;;; * Increase LED brightness, unless it's at max.
@@ -190,6 +209,29 @@ display_digit:
 	clrf	PORTB
 	return	
 
+;;; ************************************************************************
+;;; *
+;;; * check the alarm state, and increase the brightness. We do this once a
+;;; * minute while the alarm is going off. Note that we do this before we
+;;; * call run_clock, so seconds may be 0 from last run.
+;;; * ... only called when secs == 00.
+run_alarm:
+	movfw	alarming
+	xorlw	0
+	skpnz
+	return			; no alarm, so nothing to do.
+
+	incf	alarming, F	; move to next alarm phase
+
+	;; if alarming == 60, then we'll bail (turn off alarm).
+	movfw	alarming
+	xorlw	0x3c
+	skpz
+	goto	increase_brightness ; not at alarming == 60, so just inc
+
+	;; turn off brightness, reset alarm state.
+	clrf	alarming
+	goto	turn_off_led 	; ... and return.
 	
 ;;; ************************************************************************
 ;;; *
@@ -213,8 +255,10 @@ run_clock:
 	skpz
 	return
 
-	;; 60 seconds hit
+	;; 60 seconds hit. Reset it to 00, and run alarm state for next min.
 	clrf	tens_seconds
+	call	run_alarm
+	;; ... then update the minutes and continue the regular clock work.
 	incf	ones_minutes, F
 	movfw	ones_minutes
 	xorlw	0x0A
@@ -229,11 +273,13 @@ run_clock:
 	skpz
 	goto	check_alarm_and_return
 
-	;; 60 minutes hit
-	movlw	0x03		; fudge the missing time-per-hour
-	movwf	ones_seconds
-	movlw	0x01
+	;; 60 minutes hit. Adjust for the hourly error rate (per config)
+	movfw	tens_error
 	movwf	tens_seconds
+	movfw	ones_error
+	movwf	ones_seconds
+
+	;; clear the tens of minutes and continue.
 	clrf	tens_minutes
 	
 	incf	ones_hours, F
@@ -256,16 +302,37 @@ check_for_midnight:
 	skpz
 	goto	check_alarm_and_return
 
-	;; reached the end of the day (24:00:00, which is now 24:00:13).
+	;; reached the end of the day (24:00:00)
 	clrf	ones_hours
 	clrf	tens_hours
-	movlw	0x05
-	addwf	ones_seconds, F	; add more fudge...
+;;; 	movlw	0x05		; make that 00:00:18
+;;; 	addwf	ones_seconds, F	; add more fudge...
 	;; fall through
 
-check_alarm_and_return:	
-	;; FIXME: CHECK FOR THE ALARM CONDITION HERE!
-	return
+check_alarm_and_return:
+	movfw	ones_hours
+	subwf	ones_alarm_hours, W
+	skpz
+	return			; not the same, so bail
+
+	movfw	tens_hours
+	subwf	tens_alarm_hours, W
+	skpz
+	return			; bail
+
+	movfw	ones_minutes
+	subwf	ones_alarm_minutes, W
+	skpz
+	return			; bail
+
+	movfw	tens_minutes
+	subwf	tens_alarm_minutes, W
+	skpz
+	return			; bail
+
+	;; start off the alarm!
+	incf	alarming, F
+	goto	increase_brightness ; ... and return when done
 			
 ;;; ************************************************************************
 ;;; * Main
@@ -285,10 +352,11 @@ Main:
         movlw   TRISB_DATA
         movwf   TRISB
 	bcf	PCON, OSCF	; set internal oscillator to 37kHz
-	bcf	OPTION_REG, PSA	; assign prescalar to TMR0
-	bcf	OPTION_REG, PS2	; set PS2..PS0 to 001 for 1:4; that means about
-	bcf	OPTION_REG, PS1	;   9 interrupts per second (9.033, give
-	bsf	OPTION_REG, PS0	;   take based on 37kHz clock).
+	bsf	OPTION_REG, PSA	; assign prescalar to WDT, makes prescalar for TMR0 1:1
+;;; 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 001 for 1:4; that means about
+;;; 	bcf	OPTION_REG, PS1	;   9 interrupts per second (9.033, give
+;;; 	bsf	OPTION_REG, PS0	;   take based on 37kHz clock).
+	
 	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
 
         bcf     STATUS, RP0     ; set up the page 0 registers
@@ -315,7 +383,8 @@ Main:
 	clrf	brightness
 	clrf	pulsate
 	clrf	mode
-
+	clrf	alarming
+	
 	clrf	tens_hours
 	clrf	ones_hours
 	clrf	tens_minutes
@@ -331,16 +400,18 @@ Main:
 
 	movlw	0x0C		; 'C' for 'Current'
 	movwf	time_current
-	movlw	0x0A
+	movlw	0x0A		; 'A' for 'Alarm'
 	movwf	time_alarm
+	movlw	0x0E		; 'E' for 'Error'
+	movwf	time_error
 	
 main_loop:	
 	;; look for presses of either button. Delay, and do it again...
 
-	;; The "mode" button is RA<4>, and the "set" button is RA<6>.
-	btfsc	PORTA, 4
+	;; The "set" button is RA<4>, and the "mode" button is RA<5>.
+	btfsc	PORTA, 5
 	call	mode_button
-	btfsc	PORTA, 6
+	btfsc	PORTA, 4
 	call	set_button
 
 	movlw	0xFA		; delay 250mS
@@ -348,11 +419,11 @@ main_loop:
 	
 	goto main_loop
 
-	;; MODES:[0] C HhMm A HhMm
+	;; MODES:[0] C HhMm A HhMm E ##
 mode_button:
 	incf	mode, F
 	movfw	mode
-	xorlw	0x0B		; there are 10 modes. If we reach 11, turn off.
+	xorlw	0x0E		; there are 13 modes. If we reach 14, turn off.
 	skpnz
 	clrf	mode		; set back to mode 0.
 
@@ -361,6 +432,7 @@ mode_button:
 	skpnz
 	goto	disable_trisb
 
+display_current_mode:	
 	;; not mode 0. Figure out what to display and display it!
 	movlw	time_current - 1 ; start of our data block
 	addwf	mode, W		; add the current mode to it
@@ -369,8 +441,44 @@ mode_button:
 
 	goto display_digit	; display that digit and return
 	
-set_button:	
-	return	
+set_button:
+	;; see what mode we're in. If it's 2, 3, 4, 5 or 7, 8, 9, 10 or
+	;; 12 or 13 then increment the digit, roll over to zero. Update the
+	;; display.
+
+	movfw	mode
+	xorlw	0x00
+	skpnz
+	return			; if mode == 0, return
+	movfw	mode
+	xorlw	0x01
+	skpnz
+	return			; if mode == 1, return
+	movfw	mode
+	xorlw	0x06
+	skpnz
+	return			; if mode == 6, return
+	movfw	mode
+	xorlw	0x0B
+	skpnz
+	return			; if mode == 11, return
+
+	;; otherwise increment the pointed-to value, rolling over at 10,
+	;; update the display, and return
+
+	;; FIXME- stupidly allows you to set minutes > 60 but < 100
+	movlw	time_current - 1 ; start of our data block
+	addwf	mode, W		; add the current mode to it
+	movwf	FSR
+	incf	INDF, F
+	
+	movfw	INDF		; test for rollover
+	xorlw	0x0A
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	
+	goto display_current_mode ; go display it and return
+
 
 disable_trisb:
 	movlw	0xFF		; set to all INPUTS

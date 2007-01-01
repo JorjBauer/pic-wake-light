@@ -21,9 +21,12 @@
 	GLOBAL	tens_alarm_minutes
 	GLOBAL	ones_alarm_minutes
 	
+	GLOBAL	time_error
+	GLOBAL	tens_error
+	GLOBAL	ones_error
+	
 	GLOBAL	tens_seconds
 	GLOBAL	ones_seconds
-
 ;;; ; ************************************************************************
         udata
 arg1    res     1
@@ -47,6 +50,10 @@ ones_alarm_hours	res	1
 tens_alarm_minutes	res	1
 ones_alarm_minutes	res	1
 
+time_error	res	1
+tens_error	res	1
+ones_error	res	1
+	
 	;; yes, we need these AFTER the alarm time!
 tens_seconds	res	1
 ones_seconds	res	1
