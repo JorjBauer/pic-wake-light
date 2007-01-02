@@ -16,3 +16,5 @@ clean:
 install: main.hex
 	picp /dev/tty.usbserial 16f628 -s -wp main.hex
 
+copy:
+	for i in *.asm *.inc *.lkr; do unixdos $$i /Volumes/share/$$i; done

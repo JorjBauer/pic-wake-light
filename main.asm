@@ -285,6 +285,7 @@ run_clock:
 	goto	check_for_midnight
 
 	;; ones-of-hours rollover
+	clrf	ones_hours
 	incf	tens_hours, F
 	goto	check_alarm_and_return ; day ends at 24 hours, not 10 or 20...
 
