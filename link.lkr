@@ -2,6 +2,16 @@
 
 LIBPATH  .
 
+// NOTE: This used to be the stock 16f628A linker script, but it wanted to
+// allocate all RAM variables into PAGE1 instead of PAGE0 (both with gplink
+// and MPLAB). MPLAB also refused to put the interrupt vector where we want
+// it for some reason; I don't know the right way to make MPLAB allocate 
+// the interrupt vector based on an ORG 0x0004 statement (without causing 
+// error messages about it being in use already), so I rewrote this linker
+// script instead. Now databank gpr1 and gpr2 are commented out, forcing all
+// ram into the low page, and the memory location for program space ("page")
+// starts at 4 and has no reserved area. -- jorj 1/2007
+
 CODEPAGE   NAME=vectors    START=0x0      END=0x3      PROTECTED
 CODEPAGE   NAME=page       START=0x4      END=0x7FF
 CODEPAGE   NAME=.idlocs    START=0x2000   END=0x2003   PROTECTED

@@ -9,35 +9,38 @@
 	include		"delay.inc"
 
 	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _XT_OSC )
-
-	;; first version of this used _INTRC_OSC_NOCLKOUT. Now trying _XT_OSC or _LP_OSC
+	;; first version of this used _INTRC_OSC_NOCLKOUT. Turned out to be
+	;; unstable based on room temperature. Now using XT_OSC. -- jorj
 	
 _ResetVector	set	0x00
 _InitVector	set	0x04
 
 ;;; ************************************************************************
-;;; *
 ;;; * TIMING ERROR NOTES
 ;;; *
 ;;; * prescalar of 1:16 on a 2MHz clock, where we cycle every 250 instead
-;;; * of 256 segments, gives us 125 interrupts per second.
+;;; * of 256 segments, gives us 125 interrupts per second (0x7D).
 ;;; ************************************************************************
 #define INTERRUPTS_PER_SECOND 0x7D
 		
-
+#define MODEBUTTON PORTA, 5
+#define SETBUTTON PORTA, 4
+		
 ;;; ************************************************************************
+;;; * VARIABLES
+
         udata
 
-save_w	res	1
-save_status	res	1
-save_pclath	res	1
-
-tmrcnt		res	1	; timer counter
+save_w	res	1		; used to save regs in interrupt svc routine
+save_status	res	1	; used to save regs in interrupt svc routine
+save_pclath	res	1	; used to save regs in interrupt svc routine
+tmrcnt		res	1	; counts interrupts to count out whole seconds
 	
 brightness	res	1	; 4-bit value for brightness of LED
-pulsate		res	1	; information on pulsate status
+pulsate		res	1	; information on pulsate status (only 1 bit)
 
 mode		res	1	; current mode-button setting
+mode_timer	res	1	; how long before 7-segment display times out
 
 alarming	res	1	; alarm state
 		
@@ -65,6 +68,12 @@ alarming	res	1	; alarm state
 	
 ;;; ************************************************************************
 ;;; * INTERRUPT
+;;; *
+;;; * Note that this is a general-purpose interrupt routine, which could be
+;;; * used for interrupts other than TMR0. We save the current state of the
+;;; * registers and then check for the reason that we're being called. To
+;;; * add another interrupt mechanism, we could just check for it and branch.
+;;; *
 Interrupt:	
 	;; save register variables before anything else
 	movwf	save_w
@@ -91,6 +100,11 @@ done_int:
 	swapf	save_w, W	; done this way to preserve STATUS
 	retfie
 
+;;; ************************************************************************
+;;; * INT_TMR0
+;;; *
+;;; * This is the Timer0 interrupt. It handles all of the clockwork.
+	
 INT_TMR0:
 	bcf	INTCON, T0IF	; turn off interrupt flag
 
@@ -106,20 +120,22 @@ INT_TMR0:
 	skpz
 	goto	check_int	; not time yet! Finish up.
 
-	;; it's been a second, more or less. We'll drift 13-ish seconds an hour
-	;; because of the clock inaccuracy.
-	clrf	tmrcnt		; reset the timer count
+	;; it's been a second (within the crystal's accuracy, at least).
+	clrf	tmrcnt		; reset the timer loop counter
+
+	movwf	mode_timer	; see if the mode timer has expired
+	xorlw	0x00
+	skpz
+	call	mode_timer_check ; only call it if mode_timer != 0
 
 	call	run_clock
 	goto	check_int	; be sure to loop in case of missed interrupt
 
 ;;; ************************************************************************
-;;; * Subroutines
-;;; *
-
-;;; ************************************************************************
+;;; * pulsate_led
 ;;; *
 ;;; * Make the LED pulsate up/down with successive calls to pulsate_led.
+;;; * This was used for initial debugging. I've left it because it's cool. :)
 
 pulsate_led:
 	btfss	pulsate, 0	; if bit0 is set, we're pulsating down
@@ -185,7 +201,7 @@ _do_dec:
 ;;; * Put a number on the 7-segment display (valid: 0-F)
 ;;; *
 ;;; *    INPUT:	 number to display is in W
-;;; *
+;;; *		sanity-checked (&= 0x0F) just in case.
 
 display_digit:
 	andlw	0x0F		; protect from overflow in lookup table
@@ -211,6 +227,7 @@ display_digit:
 ;;; * minute while the alarm is going off. Note that we do this before we
 ;;; * call run_clock, so seconds may be 0 from last run.
 ;;; * ... only called when secs == 00.
+;;; * (the turn_off_alarm entrypoint is also used to force the alarm off.)
 run_alarm:
 	movfw	alarming
 	xorlw	0
@@ -226,6 +243,7 @@ run_alarm:
 	goto	increase_brightness ; not at alarming == 60, so just inc
 
 	;; turn off brightness, reset alarm state.
+turn_off_alarm:	
 	clrf	alarming
 	goto	turn_off_led 	; ... and return.
 	
@@ -234,7 +252,7 @@ run_alarm:
 ;;; * add a second to the clock. If it's an hour, add 13 seconds more. If
 ;;; * it's midnight, add an extra 5 seconds.
 ;;; *
-;;; * if the alarm is going off, then figure out what to do!
+;;; * if the alarm should go off, then start it as well.
 
 run_clock:
 	incf	ones_seconds, F
@@ -302,8 +320,6 @@ check_for_midnight:
 	;; reached the end of the day (24:00:00)
 	clrf	ones_hours
 	clrf	tens_hours
-;;; 	movlw	0x05		; make that 00:00:18
-;;; 	addwf	ones_seconds, F	; add more fudge...
 	;; fall through
 
 check_alarm_and_return:
@@ -330,108 +346,59 @@ check_alarm_and_return:
 	;; start off the alarm!
 	incf	alarming, F
 	goto	increase_brightness ; ... and return when done
-			
+
 ;;; ************************************************************************
-;;; * Main
 ;;; *
-;;; * Main program. Sets up registers, handles main loop.
-;;; ************************************************************************
-
-Main:
-        clrwdt
-        clrf    INTCON          ; turn off interrupts
-
-        bcf     STATUS, RP1
-        bsf     STATUS, RP0     ; set up the page 1 registers
-        bsf     OPTION_REG, NOT_RBPU ;  turn off pullups
-        movlw   TRISA_DATA
-        movwf   TRISA
-        movlw   TRISB_DATA
-        movwf   TRISB
-	bcf	PCON, OSCF	; set internal oscillator to 37kHz
-	bcf	OPTION_REG, PSA	; assign prescalar to TMR0
- 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 011 for 1:16
- 	bsf	OPTION_REG, PS1	
- 	bsf	OPTION_REG, PS0	
+;;; * If the mode button is pressed, then call this. We cycle through the
+;;; * 7-segment-display modes, which are:
+;;; *   0: off
+;;; *   1: C  (stands for "Current")
+;;; *   2: clock hours, tens digit
+;;; *   3: clock hours, ones digit
+;;; *   4: clock minutes, tens digit
+;;; *   5: clock minutes, ones digit
+;;; *   6: A  (stands for "Alarm")
+;;; *   7: alarm hours, tens digit
+;;; *   8: alarm hours, ones digit
+;;; *   9: alarm minutes, tens digit
+;;; *   10: alarm minutes, ones digit
+;;; *   11: E (stands for "Error correction")
+;;; *   12: EC tens digit
+;;; *   13: EC ones digit
+;;; *
+;;; * Whenever the mode button is pressed, any alarm which is currently going
+;;; * off is cancelled. We also start a 30-second timer; if the timer expires
+;;; * without another button press, everything is set back to mode 0.
+;;; *
+;;; * The error correction is a number of seconds that are added to the clock
+;;; * at the top of every hour. 0 is probably correct, since we're crystal-
+;;; * controlled. (FIXME: this should probably be every day instead, and have
+;;; * a negative-offset capability to accomodate forward drift.)
 	
-	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
-
-        bcf     STATUS, RP0     ; set up the page 0 registers
-        movlw   0x07		; turn off comparators
-        movwf   CMCON
-        clrf    PORTA		; set default values on porta, b (== 0)
-        clrf    PORTB
-
-        bcf     STATUS, IRP     ; indirect addressing to page 0/1, not 2/3
-
-        movlw   0xFA            ; 500mS delay
-        call    delay_ms
-        movlw   0xFA
-        call    delay_ms
-
-	;; enable TMR0 interrupts
-	bsf	INTCON, T0IE	; enable TMR0
-	bsf	INTCON, GIE	; and turn on all interrupts.
-	
-        banksel PORTA
-
-	;; initialize variables
-	clrf	tmrcnt
-	clrf	brightness
-	clrf	pulsate
-	clrf	mode
-	clrf	alarming
-	
-	clrf	tens_hours
-	clrf	ones_hours
-	clrf	tens_minutes
-	clrf	ones_minutes
-	clrf	tens_seconds
-	clrf	ones_seconds
-
-	clrf	tens_alarm_hours
-	movlw	0x06
-	movwf	ones_alarm_hours
-	clrf	tens_alarm_minutes
-	clrf	ones_alarm_minutes
-
-	;; set the default error rate
-	clrf	tens_error
-	clrf	ones_error
-
-	movlw	0x0C		; 'C' for 'Current'
-	movwf	time_current
-	movlw	0x0A		; 'A' for 'Alarm'
-	movwf	time_alarm
-	movlw	0x0E		; 'E' for 'Error'
-	movwf	time_error
-	
-main_loop:	
-	;; look for presses of either button. Delay, and do it again...
-
-	;; The "set" button is RA<4>, and the "mode" button is RA<5>.
-	btfsc	PORTA, 5
-	call	mode_button
-	btfsc	PORTA, 4
-	call	set_button
-
-	movlw	0xFA		; delay 250mS
-	call	delay_ms
-	
-	goto main_loop
-
-	;; MODES:[0] C HhMm A HhMm E ##
 mode_button:
-	incf	mode, F
+	call	turn_off_alarm	; turn off the alarm if it's going off.
+	movlw	0x1E		; we'll leave the current mode on for 30 secs
+	movwf	mode_timer
+	
+	incf	mode, F		; move to the next mode
 	movfw	mode
 	xorlw	0x0E		; there are 13 modes. If we reach 14, turn off.
 	skpnz
+set_mode0:
 	clrf	mode		; set back to mode 0.
 
 	movfw	mode		; mode 0: disable TRISB and return
-	xorlw	0x00
+ 	xorlw	0x00
 	skpnz
 	goto	disable_trisb
+
+;;; ************************************************************************
+;;; *
+;;; * show the current mode data on the 7-segment display. Note that we do
+;;; * this via INDF (the "pointer" indirect reference register) to keep the
+;;; * code simple. That requires that the variables be sequentially allocated
+;;; * in RAM. There's nothing currently forcing that to happen; the linker
+;;; * just happens to do it correctly at the moment.
 
 display_current_mode:	
 	;; not mode 0. Figure out what to display and display it!
@@ -441,8 +408,19 @@ display_current_mode:
 	movfw	INDF		; grab indirected pointer data
 
 	goto display_digit	; display that digit and return
+
+;;; ************************************************************************
+;;; *
+;;; * On a press of the set button, we turn off the alarm and reset the
+;;; * mode timer (just like when the mode button is pressed). Then we see
+;;; * whether or not our current mode supports being changed. If it does, then
+;;; * increment the value by 1 and update the display.
 	
 set_button:
+	call	turn_off_alarm	; turn off the alarm if it's going off.
+	movlw	0x1E		; we'll leave the current mode on for 30 secs
+	movwf	mode_timer
+	
 	;; see what mode we're in. If it's 2, 3, 4, 5 or 7, 8, 9, 10 or
 	;; 12 or 13 then increment the digit, roll over to zero. Update the
 	;; display.
@@ -489,6 +467,112 @@ disable_trisb:
         bcf     STATUS, RP0     ; back to page 0
 	clrf	PORTB
 	return	
+
+;;; ************************************************************************
+;;; *
+;;; * check the mode timer (only called when mode_timer != 0). If it reached
+;;; * 0 then set back to mode 0 and blank the display.
+
+mode_timer_check:
+	decfsz	mode_timer, F
+	return
+	goto	set_mode0	; if we reached 0, set back to mode0.
+			
+;;; ************************************************************************
+;;; * Main
+;;; *
+;;; * Main program. Sets up registers, handles main loop. The main loop
+;;; * is responsible for detecting button presses; it's a bunch of busy-
+;;; * waits with periodic tests for button-down. This means we don't have
+;;; * to worry about handling repeats or debounces. Quite simple! The length
+;;; * of the busy-wait also determines the repeat speed of holding down the
+;;; * button. 250mS was my first guess and it seems okay... -- jorj
+;;; ************************************************************************
+
+Main:
+        clrwdt
+        clrf    INTCON          ; turn off interrupts
+
+        bcf     STATUS, RP1
+        bsf     STATUS, RP0     ; set up the page 1 registers
+        bsf     OPTION_REG, NOT_RBPU ;  turn off pullups
+        movlw   TRISA_DATA
+        movwf   TRISA
+        movlw   TRISB_DATA
+        movwf   TRISB
+	bcf	PCON, OSCF	; set internal oscillator to 37kHz
+	bcf	OPTION_REG, PSA	; assign prescalar to TMR0
+ 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 011 for 1:16
+ 	bsf	OPTION_REG, PS1	
+ 	bsf	OPTION_REG, PS0	
+	
+	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
+
+        bcf     STATUS, RP0     ; set up the page 0 registers
+        movlw   0x07		; turn off comparators
+        movwf   CMCON
+        clrf    PORTA		; set default values on porta, b (== 0)
+        clrf    PORTB
+
+        bcf     STATUS, IRP     ; indirect addressing to page 0/1, not 2/3
+
+        movlw   0xFA            ; 500mS delay
+        call    delay_ms
+        movlw   0xFA
+        call    delay_ms
+
+	;; enable TMR0 interrupts
+	bsf	INTCON, T0IE	; enable TMR0
+	bsf	INTCON, GIE	; and turn on all interrupts.
+	
+        banksel PORTA
+
+	;; ***
+	;; initialize all variables.
+	;; ***
+	
+	clrf	tmrcnt
+	clrf	brightness
+	clrf	pulsate
+	clrf	mode
+	clrf	alarming
+	
+	clrf	tens_hours
+	clrf	ones_hours
+	clrf	tens_minutes
+	clrf	ones_minutes
+	clrf	tens_seconds
+	clrf	ones_seconds
+
+	clrf	tens_alarm_hours
+	movlw	0x06
+	movwf	ones_alarm_hours
+	clrf	tens_alarm_minutes
+	clrf	ones_alarm_minutes
+
+	;; set the default error rate
+	clrf	tens_error
+	clrf	ones_error
+
+	;; set the static display values for the 7-seg display
+	movlw	0x0C		; 'C' for 'Current'
+	movwf	time_current
+	movlw	0x0A		; 'A' for 'Alarm'
+	movwf	time_alarm
+	movlw	0x0E		; 'E' for 'Error'
+	movwf	time_error
+	
+main_loop:	
+	;; look for presses of either button. Delay, and do it again...
+	btfsc	MODEBUTTON
+	call	mode_button
+	btfsc	SETBUTTON
+	call	set_button
+
+	movlw	0xFA		; delay 250mS
+	call	delay_ms
+	
+	goto main_loop
 
 	
 	END

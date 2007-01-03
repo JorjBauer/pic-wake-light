@@ -29,6 +29,9 @@ delay3	res	1
 ;;; * it's (8 / speed) seconds. So each is about 108.1uS at 37kHz. Multiply by
 ;;; * 10 should get us into the right ballpark (about 10mS).
 ;;; * ... and at 2MHz we need about 512 times.
+;;; *
+;;; *  NOTE: I don't know that this is exactly one mS! I haven't done the
+;;; *  math. If you want exactly 1 mS, do the math!
 ;;; ************************************************************************
 
 	
