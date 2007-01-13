@@ -1,11 +1,12 @@
-        Processor       16f628a
-        Radix           DEC
-        EXPAND
+	Processor	16f628a
+	Radix		DEC
+	EXPAND
 
-        include         "p16f628a.inc"
-        include         "common.inc"
-        include         "globals.inc"
-        
+	include		"p16f628a.inc"
+	include		"common.inc"
+	include		"piceeprom.inc"
+	include		"globals.inc"
+	
 	include		"delay.inc"
 
 	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _XT_OSC )
@@ -25,11 +26,14 @@ _InitVector	set	0x04
 		
 #define MODEBUTTON PORTA, 5
 #define SETBUTTON PORTA, 4
-		
+
+#define ALARM_IN_MINUTES 0x3C	; how long the alarm light stays on (minutes)
+#define MODE_TIMEOUT 0x1E		; how long before 7-seg times out
+
 ;;; ************************************************************************
 ;;; * VARIABLES
 
-        udata
+	udata
 
 save_w	res	1		; used to save regs in interrupt svc routine
 save_status	res	1	; used to save regs in interrupt svc routine
@@ -43,14 +47,19 @@ mode		res	1	; current mode-button setting
 mode_timer	res	1	; how long before 7-segment display times out
 
 alarming	res	1	; alarm state
+
+rollover	res	1	; temporary rollover pointer
+
+#define EEPROM_TENS_ERROR 0x00	; eeprom location 0x00
+#define EEPROM_ONES_ERROR 0x01	; eeprom location 0x01
 		
 ;;; ************************************************************************
-        code
+	code
 
-        ORG     _ResetVector
-        goto    Main
+	ORG	_ResetVector
+	goto	Main
 
-        ORG     _InitVector
+	ORG	_InitVector
 	goto	Interrupt
 
 ;;; ************************************************************************
@@ -64,7 +73,7 @@ alarming	res	1	; alarm state
 ;;; * middle somewhere).
 ;;; ************************************************************************
 
-        include "lookup-tables.asm"
+	include "lookup-tables.asm"
 	
 ;;; ************************************************************************
 ;;; * INTERRUPT
@@ -123,6 +132,9 @@ INT_TMR0:
 	;; it's been a second (within the crystal's accuracy, at least).
 	clrf	tmrcnt		; reset the timer loop counter
 
+	;; ACTUAL START OF INTERRUPT 0 PROCESSING (once per second)
+	call pulsate_led ; DEBUGGING - FIXME - REMOVE
+	
 	movwf	mode_timer	; see if the mode timer has expired
 	xorlw	0x00
 	skpz
@@ -200,7 +212,7 @@ _do_dec:
 ;;; *
 ;;; * Put a number on the 7-segment display (valid: 0-F)
 ;;; *
-;;; *    INPUT:	 number to display is in W
+;;; *	 INPUT:	 number to display is in W
 ;;; *		sanity-checked (&= 0x0F) just in case.
 
 display_digit:
@@ -214,10 +226,10 @@ display_digit:
 	;; segment off, and turn on an output of 0 in order to enable the
 	;; segment. So we write the data to TRISB, instead of PORTB, and then
 	;; clear PORTB to enable 0 on the outputs.
-        bcf     STATUS, RP1
-        bsf     STATUS, RP0     ; TRISB is in page 1
+	bcf	STATUS, RP1
+	bsf	STATUS, RP0	; TRISB is in page 1
 	movwf	TRISB
-        bcf     STATUS, RP0     ; back to page 0
+	bcf	STATUS, RP0	; back to page 0
 	clrf	PORTB
 	return	
 
@@ -238,14 +250,14 @@ run_alarm:
 
 	;; if alarming == 60, then we'll bail (turn off alarm).
 	movfw	alarming
-	xorlw	0x3c
+	xorlw	ALARM_IN_MINUTES
 	skpz
 	goto	increase_brightness ; not at alarming == 60, so just inc
 
 	;; turn off brightness, reset alarm state.
-turn_off_alarm:	
+turn_off_alarm: 
 	clrf	alarming
-	goto	turn_off_led 	; ... and return.
+	goto	turn_off_led	; ... and return.
 	
 ;;; ************************************************************************
 ;;; *
@@ -351,20 +363,20 @@ check_alarm_and_return:
 ;;; *
 ;;; * If the mode button is pressed, then call this. We cycle through the
 ;;; * 7-segment-display modes, which are:
-;;; *   0: off
-;;; *   1: C  (stands for "Current")
-;;; *   2: clock hours, tens digit
-;;; *   3: clock hours, ones digit
-;;; *   4: clock minutes, tens digit
-;;; *   5: clock minutes, ones digit
-;;; *   6: A  (stands for "Alarm")
-;;; *   7: alarm hours, tens digit
-;;; *   8: alarm hours, ones digit
-;;; *   9: alarm minutes, tens digit
-;;; *   10: alarm minutes, ones digit
-;;; *   11: E (stands for "Error correction")
-;;; *   12: EC tens digit
-;;; *   13: EC ones digit
+;;; *	0: off
+;;; *	1: C  (stands for "Current")
+;;; *	2: clock hours, tens digit
+;;; *	3: clock hours, ones digit
+;;; *	4: clock minutes, tens digit
+;;; *	5: clock minutes, ones digit
+;;; *	6: A  (stands for "Alarm")
+;;; *	7: alarm hours, tens digit
+;;; *	8: alarm hours, ones digit
+;;; *	9: alarm minutes, tens digit
+;;; *	10: alarm minutes, ones digit
+;;; *	11: E (stands for "Error correction")
+;;; *	12: EC tens digit
+;;; *	13: EC ones digit
 ;;; *
 ;;; * Whenever the mode button is pressed, any alarm which is currently going
 ;;; * off is cancelled. We also start a 30-second timer; if the timer expires
@@ -372,12 +384,11 @@ check_alarm_and_return:
 ;;; *
 ;;; * The error correction is a number of seconds that are added to the clock
 ;;; * at the top of every hour. 0 is probably correct, since we're crystal-
-;;; * controlled. (FIXME: this should probably be every day instead, and have
-;;; * a negative-offset capability to accomodate forward drift.)
-	
+;;; * controlled.
+
 mode_button:
 	call	turn_off_alarm	; turn off the alarm if it's going off.
-	movlw	0x1E		; we'll leave the current mode on for 30 secs
+	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
 	movwf	mode_timer
 	
 	incf	mode, F		; move to the next mode
@@ -388,7 +399,7 @@ set_mode0:
 	clrf	mode		; set back to mode 0.
 
 	movfw	mode		; mode 0: disable TRISB and return
- 	xorlw	0x00
+	xorlw	0x00
 	skpnz
 	goto	disable_trisb
 
@@ -418,7 +429,7 @@ display_current_mode:
 	
 set_button:
 	call	turn_off_alarm	; turn off the alarm if it's going off.
-	movlw	0x1E		; we'll leave the current mode on for 30 secs
+	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
 	movwf	mode_timer
 	
 	;; see what mode we're in. If it's 2, 3, 4, 5 or 7, 8, 9, 10 or
@@ -445,26 +456,91 @@ set_button:
 	;; otherwise increment the pointed-to value, rolling over at 10,
 	;; update the display, and return
 
-	;; FIXME- stupidly allows you to set minutes > 60 but < 100
 	movlw	time_current - 1 ; start of our data block
 	addwf	mode, W		; add the current mode to it
 	movwf	FSR
-	incf	INDF, F
+	incf	INDF, F 
+
+	;; figure out the rollover amount. Depends on what mode we're in. Most
+	;; roll over at 10, but some roll over at 3 or 6.
+	movfw	mode
+	xorlw	0x02		; mode 2 rolls over a 3 (tens hours).
+	skpnz
+	goto	rollover_3
+	movfw	mode
+	xorlw	0x07		; mode 7 also rolls over at 3 (tens hours alarm).
+	skpnz
+	goto	rollover_3
 	
-	movfw	INDF		; test for rollover
+	movfw	mode
+	xorlw	0x04		; modes 4, 9, 12 roll over at 6 (tens of mins, secs)
+	skpnz
+	goto	rollover_6
+	movfw	mode
+	xorlw	0x09
+	skpnz
+	goto	rollover_6
+	movfw	mode
+	xorlw	0x0C
+	skpnz
+	goto	rollover_6
+	
+	;; everything else rolls over at 10 (the majority of cases)
+rollover_10:
+	movwf	INDF
 	xorlw	0x0A
 	skpnz
 	clrf	INDF		; set back to 0; it rolled over
-	
-	goto display_current_mode ; go display it and return
+	goto	write_back_error
+rollover_6:
+	movwf	INDF
+	xorlw	0x06
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	goto	write_back_error
+rollover_3:
+	movwf	INDF
+	xorlw	0x03
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	;; fall through
 
+write_back_error:
+	;; if we just changed the tens of error, then write it back to the eeprom
+	movwf	mode
+	xorlw	0x0C
+	skpnz
+	call	write_error_tens	
+
+	;; if we just changed the ones of error, then write it back
+	movwf	mode
+	xorlw	0x0D
+	skpnz
+	call	write_error_ones
+	
+	;; all done: go display the new digit and return
+	goto display_current_mode
+
+write_error_tens:
+	movlw	EEPROM_TENS_ERROR
+	movwf	arg2
+	movfw	INDF
+	call	eep_write
+	return
+	
+write_error_ones:
+	movlw	EEPROM_ONES_ERROR
+	movwf	arg2
+	movfw	INDF
+	call	eep_write
+	return
 
 disable_trisb:
 	movlw	0xFF		; set to all INPUTS
-        bcf     STATUS, RP1
-        bsf     STATUS, RP0     ; TRISB is in page 1
+	bcf	STATUS, RP1
+	bsf	STATUS, RP0	; TRISB is in page 1
 	movwf	TRISB
-        bcf     STATUS, RP0     ; back to page 0
+	bcf	STATUS, RP0	; back to page 0
 	clrf	PORTB
 	return	
 
@@ -490,42 +566,42 @@ mode_timer_check:
 ;;; ************************************************************************
 
 Main:
-        clrwdt
-        clrf    INTCON          ; turn off interrupts
+	clrwdt
+	clrf	INTCON		; turn off interrupts
 
-        bcf     STATUS, RP1
-        bsf     STATUS, RP0     ; set up the page 1 registers
-        bsf     OPTION_REG, NOT_RBPU ;  turn off pullups
-        movlw   TRISA_DATA
-        movwf   TRISA
-        movlw   TRISB_DATA
-        movwf   TRISB
+	bcf	STATUS, RP1
+	bsf	STATUS, RP0	; set up the page 1 registers
+	bsf	OPTION_REG, NOT_RBPU ;	turn off pullups
+	movlw TRISA_DATA
+	movwf TRISA
+	movlw TRISB_DATA
+	movwf TRISB
 	bcf	PCON, OSCF	; set internal oscillator to 37kHz
-	bcf	OPTION_REG, PSA	; assign prescalar to TMR0
- 	bcf	OPTION_REG, PS2	; set PS2..PS0 to 011 for 1:16
- 	bsf	OPTION_REG, PS1	
- 	bsf	OPTION_REG, PS0	
+	bcf	OPTION_REG, PSA ; assign prescalar to TMR0
+	bcf	OPTION_REG, PS2 ; set PS2..PS0 to 011 for 1:16
+	bsf	OPTION_REG, PS1 
+	bsf	OPTION_REG, PS0 
 	
 	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
 
-        bcf     STATUS, RP0     ; set up the page 0 registers
-        movlw   0x07		; turn off comparators
-        movwf   CMCON
-        clrf    PORTA		; set default values on porta, b (== 0)
-        clrf    PORTB
+	bcf	STATUS, RP0	; set up the page 0 registers
+	movlw	0x07		; turn off comparators
+	movwf	CMCON
+	clrf	PORTA		; set default values on porta, b (== 0)
+	clrf	PORTB
 
-        bcf     STATUS, IRP     ; indirect addressing to page 0/1, not 2/3
+	bcf	STATUS, IRP	; indirect addressing to page 0/1, not 2/3
 
-        movlw   0xFA            ; 500mS delay
-        call    delay_ms
-        movlw   0xFA
-        call    delay_ms
+	movlw	0xFA		; 500mS delay
+	call	delay_ms
+	movlw	0xFA
+	call	delay_ms
 
 	;; enable TMR0 interrupts
 	bsf	INTCON, T0IE	; enable TMR0
 	bsf	INTCON, GIE	; and turn on all interrupts.
 	
-        banksel PORTA
+	banksel PORTA
 
 	;; ***
 	;; initialize all variables.
@@ -551,9 +627,13 @@ Main:
 	clrf	ones_alarm_minutes
 
 	;; set the default error rate
-	clrf	tens_error
-	clrf	ones_error
-
+	movlw	EEPROM_TENS_ERROR
+	call	eep_read
+	movwf	tens_error
+	movlw	EEPROM_ONES_ERROR
+	call	eep_read
+	movwf	ones_error
+	
 	;; set the static display values for the 7-seg display
 	movlw	0x0C		; 'C' for 'Current'
 	movwf	time_current

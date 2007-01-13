@@ -20,11 +20,13 @@ file_000=no
 file_001=no
 file_002=no
 file_003=no
+file_004=no
 [FILE_INFO]
 file_000=main.asm
 file_001=delay.asm
 file_002=globals.asm
-file_003=link.lkr
+file_003=piceeprom.asm
+file_004=link.lkr
 [SUITE_INFO]
 suite_guid={6B3DAA78-59C1-46DD-B6AA-DBDAE4E06484}
 suite_state=
