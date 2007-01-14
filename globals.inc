@@ -2,6 +2,9 @@
 ;;; * Global variables
 ;;; *
 
+ ;; 1 == 32.768kHz clock, 0 == 2MHz clock
+#define SLOW_CLOCK 1
+
         EXTERN  arg1
         EXTERN  arg2
 

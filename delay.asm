@@ -4,6 +4,7 @@
 
 	include		"p16f628a.inc"
 	include		"common.inc"
+	include		"globals.inc"
 
 	GLOBAL	delay_ms
 
@@ -38,20 +39,28 @@ delay3	res	1
 delay_ms:
 	movwf	delay1
 
-loop1:	
+loop1:
+#if SLOW_CLOCK == 0
 	movlw	0x01
 	movwf	delay2
+#endif
 	
-loop2:	
-	movlw	0xFF
+loop2:
+#if SLOW_CLOCK == 1
+	movlw	0x10		; slow
+#else
+	movlw	0xFF		; fast
+#endif
 	movwf	delay3
 	
 loop3:
 	decfsz	delay3, F
 	goto	loop3
 
+#if SLOW_CLOCK == 0
 	decfsz	delay2, F
 	goto	loop2
+#endif
 
 	decfsz	delay1, F
 	goto	loop1

@@ -34,4 +34,27 @@ get_digit_segments:
 	RETLW	0x7C		; D = %0111 1100
 	RETLW	0x5B		; E = %0101 1011
 	RETLW	0x1B		; F = %0001 1011
+
+#if SLOW_CLOCK == 0
+;;; get_brightness only used for 2MHz xtals (the "fast" setting)
+get_brightness:
+	ADDWF	PCL, F
+	RETLW	0x00
+	RETLW	0x10
+	RETLW	0x20
+	RETLW	0x30
+	RETLW	0x40
+	RETLW	0x50
+	RETLW	0x60
+	RETLW	0x70
+	RETLW	0x80
+	RETLW	0x90
+	RETLW	0xA0
+	RETLW	0xB0
+	RETLW	0xC0
+	RETLW	0xD0
+	RETLW	0xE0
+	RETLW	0XFF
+	RETLW	0XFF
+#endif
 	

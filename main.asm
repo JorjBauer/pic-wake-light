@@ -19,16 +19,86 @@ _InitVector	set	0x04
 ;;; ************************************************************************
 ;;; * TIMING ERROR NOTES
 ;;; *
-;;; * prescalar of 1:16 on a 2MHz clock, where we cycle every 250 instead
-;;; * of 256 segments, gives us 125 interrupts per second (0x7D).
+;;; * prescaler of 1:16 on a 2MHz clock, where we cycle every 250 instead
+;;; * of 256 segments, gives us 125 interrupts per second (0x7D). As long as
+;;; * we have less than 255 interrupts per second, we can use this for PWM
+;;; * on the LED as well.
+;;; *
+;;; * For 32768Hz clock, we cycle all 256 at a 1:1 prescaler which gives us
+;;; * 32 interrupts per second (0x20).
 ;;; ************************************************************************
+#if SLOW_CLOCK
+#define INTERRUPTS_PER_SECOND 0x20
+#else
 #define INTERRUPTS_PER_SECOND 0x7D
-		
+#endif
+
 #define MODEBUTTON PORTA, 5
 #define SETBUTTON PORTA, 4
 
 #define ALARM_IN_MINUTES 0x3C	; how long the alarm light stays on (minutes)
 #define MODE_TIMEOUT 0x1E		; how long before 7-seg times out
+
+#define MIN_BRIGHTNESS 0x00
+#define MAX_BRIGHTNESS 0x0F
+
+;;; * possible option_reg settings
+#define NO_RBPU 0x80
+#define YES_RBPU 0x00
+#define NO_INTEDG 0x00
+#define YES_INTEDG 0x40
+#define T0CS_INTERNAL 0x00
+#define T0CS_RA4 0x20
+#define T0SE_HIGHTOLOW 0x10
+#define T0SE_LOWTOHIGH 0x00
+#define PRESCALER_WDT_1		0x08
+#define PRESCALER_WDT_2		0x09
+#define PRESCALER_WDT_4		0x0A
+#define PRESCALER_WDT_8		0x0B
+#define PRESCALER_WDT_16	0x0C
+#define PRESCALER_WDT_32	0x0D
+#define PRESCALER_WDT_64	0x0E
+#define PRESCALER_WDT_128	0x0F
+#define PRESCALER_TMR0_2	0x08
+#define PRESCALER_TMR0_4	0x09
+#define PRESCALER_TMR0_8	0x0A
+#define PRESCALER_TMR0_16	0x0B
+#define PRESCALER_TMR0_32	0x0C
+#define PRESCALER_TMR0_64	0x0D
+#define PRESCALER_TMR0_128	0x0E
+#define PRESCALER_TMR0_256	0x0F
+
+
+;;; ************************************************************************
+;;; * PWM NOTES
+;;; *
+;;; * PORTB used to be wired exclusively to the 7-segment display, but the 
+;;; * hardware PWM is on PORTB<3>. So there are some hacks in here to remap
+;;; * B<3> to A<3>. TRISB<3> must be CLEARED at all times for the PWM to work.
+;;; *
+;;; * To enable PWM, we set the frequency via register PR2. We set the duty
+;;; * cycle via CCPR1L and CCP1CON<5><4>. Clear TRISB<3>, set the TMR2 
+;;; * prescaler, and enable TMR2 via T2CON.
+;;; *
+;;; * The PWM frequency is [ (PR2) + 1 ] * 4 * (1/Fosc) * prescaler. So for 
+;;; *  a 20MHz xtal, PR2 of 0xFF, and prescaler of 16, that's 1.22kHz.
+;;; *
+;;; * The duty cycle is controlled by the 10-bit digit consisting of the high 
+;;; * 8 bits in CCPR1L, and the low 2 bits in CCP1CON<5> and <4>.
+;;; *   duty cycle = (10-bit CCP) * (1/Fosc) * prescaler
+;;; *
+;;; * The effective pwm resolution (in bits) is log(Fosc / (Fpwm * prescaler)) / log(2)
+;;; *  so 5 bits of resolution for 32kHz xtal, PR2 of 0x08.
+;;; *
+;;; * -- this version uses a 2MHz xtal, PR2=0xFF, PS=1 resulting in almost 2kHz.
+;;; *
+;;; ************************************************************************
+
+#if SLOW_CLOCK
+#define PR2_VALUE 0x08
+#else
+#define PR2_VALUE 0xFF
+#endif
 
 ;;; ************************************************************************
 ;;; * VARIABLES
@@ -40,14 +110,16 @@ save_status	res	1	; used to save regs in interrupt svc routine
 save_pclath	res	1	; used to save regs in interrupt svc routine
 tmrcnt		res	1	; counts interrupts to count out whole seconds
 	
-brightness	res	1	; 4-bit value for brightness of LED
+brightness	res	1	; PWM brightness of the LED. 0 is off, and
+				; full brightness is INTERRUPTS_PER_SECOND.
+
 pulsate		res	1	; information on pulsate status (only 1 bit)
 
 mode		res	1	; current mode-button setting
 mode_timer	res	1	; how long before 7-segment display times out
 
 alarming	res	1	; alarm state
-
+	
 rollover	res	1	; temporary rollover pointer
 
 #define EEPROM_TENS_ERROR 0x00	; eeprom location 0x00
@@ -122,7 +194,7 @@ INT_TMR0:
 	;; works fine if we divide by 250.
 	movlw	0x06
 	addwf	TMR0, F
-	
+
 	incf	tmrcnt, F
 	movfw	tmrcnt
 	xorlw	INTERRUPTS_PER_SECOND
@@ -134,6 +206,8 @@ INT_TMR0:
 
 	;; ACTUAL START OF INTERRUPT 0 PROCESSING (once per second)
 	call pulsate_led ; DEBUGGING - FIXME - REMOVE
+	movfw	brightness ; DEBUGGING
+	call	display_digit ; DEBUGGING 
 	
 	movwf	mode_timer	; see if the mode timer has expired
 	xorlw	0x00
@@ -154,14 +228,14 @@ pulsate_led:
 	goto	pulsate_up
 pulsate_down:
 	movfw	brightness
-	sublw	0
+	xorlw	MIN_BRIGHTNESS
 	skpz
 	goto	decrease_brightness
 	bcf	pulsate, 0	; set to pulsate up next time
 	return
 pulsate_up:
 	movfw	brightness
-	sublw	0x0F
+	xorlw	MAX_BRIGHTNESS
 	skpz
 	goto	increase_brightness
 	bsf	pulsate, 0	; set to pulsate down next time
@@ -173,24 +247,69 @@ pulsate_up:
 	
 turn_off_led:
 	clrf	brightness
-	clrf	PORTA
+	clrf	CCPR1L
+	bcf	CCP1CON, CCP1X
+	bcf	CCP1CON, CCP1Y
 	return
 		
 ;;; ************************************************************************
+;;; * increase_brightness (and set_brightness)
 ;;; *
 ;;; * Increase LED brightness, unless it's at max.
+;;; *
+;;; * This is also the entry to set_brightness, the only function that sets
+;;; * the LED brightness in the program. It sets the PWM appropriately for the
+;;; * given brightness level (0-15).
+;;  *
+;;; * If we're running with a very fast clock (say, 2MHz) then we call 
+;;; * get_brightness to convert it to an appropriate PWM value. The PWM is 
+;;; * controlled by a 10-bit value: the high 8 are in CCPR1L, which come from
+;;; * get_brightness directly. The low 2 are in [ CCP1X | CCP1Y ], and can be 
+;;; * 0 when running at 2MHz. We can also check if the brightness is 0xFF and 
+;;; * set the low 2 bits to 1, or something.
+;;; *
+;;; * When running with a slow clock (32.768kHz), the PWM only has about 5 bits
+;;; * of resolution so the lookup table is useless. We use brightness directly,
+;;; * and have to set the low 2 bits in CCP1[XY] and the low 2 bits in CCPR1L.
 
 increase_brightness:
 	movfw	brightness
-	sublw	0x0F
+	xorlw	MAX_BRIGHTNESS
 	skpz
-	goto	_do_inc
-	return
-_do_inc:
 	incf	brightness, F
+#if SLOW_CLOCK
+;;; set_brightness for 32.768kHz:
+set_brightness:
 	movfw	brightness
-	movwf	PORTA
+	btfss	brightness, 0
+	bcf		CCP1CON, CCP1X
+	btfsc	brightness, 0
+	bsf		CCP1CON, CCP1X
+	btfss	brightness, 1
+	bcf		CCP1CON, CCP1Y
+	btfsc	brightness, 1
+	bsf		CCP1CON, CCP1Y
+	
+	btfss	brightness, 2
+	bcf		CCPR1L, 0
+	btfsc	brightness, 2
+	bsf		CCPR1L, 0
+	btfss	brightness, 3
+	bcf		CCPR1L, 1
+	btfsc	brightness, 3
+	bsf		CCPR1L, 1
+	
 	return
+#else
+;;; set_brightness for 2MHz:
+set_brightness:
+	movfw	brightness
+	call	get_brightness	; lookup the right PWM value...
+	movwf	CCPR1L		; the low two bits of the PWM are always off. The rest follow brightness.
+	bcf	CCP1CON, CCP1X	; brightness == 0 means "clear the bottom 2 bits"
+	bcf	CCP1CON, CCP1Y
+	return
+#endif
 
 ;;; ************************************************************************
 ;;; *
@@ -198,15 +317,10 @@ _do_inc:
 	
 decrease_brightness:
 	movfw	brightness
-	sublw	0
+	xorlw	MIN_BRIGHTNESS
 	skpz
-	goto	_do_dec
-	return
-_do_dec:
 	decf	brightness, F
-	movfw	brightness
-	movwf	PORTA
-	return
+	goto	set_brightness
 
 ;;; ************************************************************************
 ;;; *
@@ -226,9 +340,15 @@ display_digit:
 	;; segment off, and turn on an output of 0 in order to enable the
 	;; segment. So we write the data to TRISB, instead of PORTB, and then
 	;; clear PORTB to enable 0 on the outputs.
+
 	bcf	STATUS, RP1
 	bsf	STATUS, RP0	; TRISB is in page 1
 	movwf	TRISB
+	btfss	TRISB, 3	; TRISB<3> is part of PWM0 now, so if we wanted
+	bcf		TRISA, 3	; to change it we need to change TRISA<3> instead.
+	btfsc	TRISB, 3	; And we leave TRISB<3> clear when done.
+	bsf		TRISA, 3
+	bcf		TRISB, 3
 	bcf	STATUS, RP0	; back to page 0
 	clrf	PORTB
 	return	
@@ -236,29 +356,22 @@ display_digit:
 ;;; ************************************************************************
 ;;; *
 ;;; * check the alarm state, and increase the brightness. We do this once a
-;;; * minute while the alarm is going off. Note that we do this before we
+;;; * second while the alarm is going off. Note that we do this before we
 ;;; * call run_clock, so seconds may be 0 from last run.
-;;; * ... only called when secs == 00.
+;;; * 
 ;;; * (the turn_off_alarm entrypoint is also used to force the alarm off.)
-run_alarm:
-	movfw	alarming
-	xorlw	0
-	skpnz
-	return			; no alarm, so nothing to do.
-
+increase_alarm:
 	incf	alarming, F	; move to next alarm phase
-
-	;; if alarming == 60, then we'll bail (turn off alarm).
+	;; if alarm has gone its max length, then we'll bail (turn off alarm).
 	movfw	alarming
 	xorlw	ALARM_IN_MINUTES
 	skpz
-	goto	increase_brightness ; not at alarming == 60, so just inc
-
-	;; turn off brightness, reset alarm state.
+	goto	increase_brightness
+	;; else fall through: turn off brightness, reset alarm state.
 turn_off_alarm: 
 	clrf	alarming
 	goto	turn_off_led	; ... and return.
-	
+
 ;;; ************************************************************************
 ;;; *
 ;;; * add a second to the clock. If it's an hour, add 13 seconds more. If
@@ -281,15 +394,16 @@ run_clock:
 	skpz
 	return
 
-	;; 60 seconds hit. Reset it to 00, and run alarm state for next min.
+	;; 60 seconds hit. Reset it to 00.
 	clrf	tens_seconds
-	call	run_alarm
-	;; ... then update the minutes and continue the regular clock work.
+	;; ... then update the minutes
 	incf	ones_minutes, F
 	movfw	ones_minutes
 	xorlw	0x0A
 	skpz
-	goto	check_alarm_and_return
+	return	;not 60 secs, so continue
+	
+	call	check_alarm_and_return	; at top of every minute, increase alarm if req'd
 
 	;; ones-of-minutes rollover
 	clrf	ones_minutes
@@ -317,7 +431,6 @@ run_clock:
 	;; ones-of-hours rollover
 	clrf	ones_hours
 	incf	tens_hours, F
-	goto	check_alarm_and_return ; day ends at 24 hours, not 10 or 20...
 
 check_for_midnight:
 	movfw	tens_hours
@@ -332,9 +445,16 @@ check_for_midnight:
 	;; reached the end of the day (24:00:00)
 	clrf	ones_hours
 	clrf	tens_hours
-	;; fall through
+	return
 
 check_alarm_and_return:
+	;; if the alarm is already running, then keep running it.
+	movfw	alarming
+	xorlw	0x00
+	skpz
+	goto	increase_alarm
+
+	;; otherwise check to see if the alarm needs to start.
 	movfw	ones_hours
 	subwf	ones_alarm_hours, W
 	skpz
@@ -356,8 +476,7 @@ check_alarm_and_return:
 	return			; bail
 
 	;; start off the alarm!
-	incf	alarming, F
-	goto	increase_brightness ; ... and return when done
+	goto	increase_alarm 	; and return when done
 
 ;;; ************************************************************************
 ;;; *
@@ -540,6 +659,8 @@ disable_trisb:
 	bcf	STATUS, RP1
 	bsf	STATUS, RP0	; TRISB is in page 1
 	movwf	TRISB
+	bcf	TRISB, 3	; ... but we don't care about TRISB<3> (b/c PWM)
+	bsf	TRISA, 3	; ... and we do care about TRISA<3> (substitute for B<3>)
 	bcf	STATUS, RP0	; back to page 0
 	clrf	PORTB
 	return	
@@ -555,58 +676,13 @@ mode_timer_check:
 	goto	set_mode0	; if we reached 0, set back to mode0.
 			
 ;;; ************************************************************************
-;;; * Main
+;;; * init_variables
 ;;; *
-;;; * Main program. Sets up registers, handles main loop. The main loop
-;;; * is responsible for detecting button presses; it's a bunch of busy-
-;;; * waits with periodic tests for button-down. This means we don't have
-;;; * to worry about handling repeats or debounces. Quite simple! The length
-;;; * of the busy-wait also determines the repeat speed of holding down the
-;;; * button. 250mS was my first guess and it seems okay... -- jorj
-;;; ************************************************************************
+;;; * initialize all variables to default values
 
-Main:
-	clrwdt
-	clrf	INTCON		; turn off interrupts
+init_variables:
+	call	disable_trisb
 
-	bcf	STATUS, RP1
-	bsf	STATUS, RP0	; set up the page 1 registers
-	bsf	OPTION_REG, NOT_RBPU ;	turn off pullups
-	movlw TRISA_DATA
-	movwf TRISA
-	movlw TRISB_DATA
-	movwf TRISB
-	bcf	PCON, OSCF	; set internal oscillator to 37kHz
-	bcf	OPTION_REG, PSA ; assign prescalar to TMR0
-	bcf	OPTION_REG, PS2 ; set PS2..PS0 to 011 for 1:16
-	bsf	OPTION_REG, PS1 
-	bsf	OPTION_REG, PS0 
-	
-	bcf	OPTION_REG, T0CS	; set TMR0 to timer mode
-
-	bcf	STATUS, RP0	; set up the page 0 registers
-	movlw	0x07		; turn off comparators
-	movwf	CMCON
-	clrf	PORTA		; set default values on porta, b (== 0)
-	clrf	PORTB
-
-	bcf	STATUS, IRP	; indirect addressing to page 0/1, not 2/3
-
-	movlw	0xFA		; 500mS delay
-	call	delay_ms
-	movlw	0xFA
-	call	delay_ms
-
-	;; enable TMR0 interrupts
-	bsf	INTCON, T0IE	; enable TMR0
-	bsf	INTCON, GIE	; and turn on all interrupts.
-	
-	banksel PORTA
-
-	;; ***
-	;; initialize all variables.
-	;; ***
-	
 	clrf	tmrcnt
 	clrf	brightness
 	clrf	pulsate
@@ -642,7 +718,88 @@ Main:
 	movlw	0x0E		; 'E' for 'Error'
 	movwf	time_error
 	
-main_loop:	
+	return
+	
+init_pwm:
+	;; enable TMR2 for the PWM (no interrupt)
+	clrf	T2CON
+	clrf	INTCON
+	movlw	PR2_VALUE
+	bsf	STATUS, RP0	; set up the page 1 registers
+	movwf	PR2		; set timer2 period register
+	bcf	STATUS, RP0	; set up the page 0 registers
+	clrf	CCPR1L	; set initial duty cycle to 0%
+	bcf	CCP1CON, 5
+	bcf	CCP1CON, 4
+	bcf	STATUS, RP1
+	
+	bsf	STATUS, RP0	; set up the page 1 registers
+	bcf	TRISB, 3	;; enable CCP1 output for PWM
+	bcf	STATUS, RP0	; set up the page 0 registers
+
+	movlw	0x0C		; turn on PWM
+	movwf	CCP1CON
+	movlw	0x04	; prescaler = 1:1, enabled, no postscaler
+	movwf	T2CON	;; enable timer, which (finally) enables PWM
+
+	return
+	
+;;; ************************************************************************
+;;; * Main
+;;; *
+;;; * Main program. Sets up registers, handles main loop. The main loop
+;;; * is responsible for detecting button presses; it's a bunch of busy-
+;;; * waits with periodic tests for button-down. This means we don't have
+;;; * to worry about handling repeats or debounces. Quite simple! The length
+;;; * of the busy-wait also determines the repeat speed of holding down the
+;;; * button. 250mS was my first guess and it seems okay... -- jorj
+;;; ************************************************************************
+
+Main:
+	;; standard initialization for the 16F62[78] series
+	clrwdt
+	clrf	INTCON		; turn off interrupts
+	bcf	STATUS, RP1 ; got, I hate page 2/3 variables. Stay in 0/1.
+	bsf	STATUS, RP0	; about to set page1 variables
+	movlw TRISA_DATA
+	movwf TRISA
+	movlw TRISB_DATA
+	movwf TRISB
+	bcf TRISB, 3    ; (enable PWM explicitly)
+	bsf	TRISA, 3	; (and substitute A<3> for B<3>)
+    ;; if we needed to set the internal oscillator speed, we'd do it here
+    ;; bsf PCON, OSCF ; set for high-speed, clear for low-speed
+#if SLOW_CLOCK
+	; by setting the prescaler to the WDT, it makes TMR0 use no prescaler
+    movlw	NO_RBPU | NO_INTEDG | T0CS_INTERNAL | PRESCALER_WDT_1
+#else
+    movlw	NO_RBPU | NO_INTEDG | T0CS_INTERNAL | PRESCALER_TMR0_16
+#endif
+    movwf	OPTION_REG
+	bcf	STATUS, RP0	; back to page0 variables
+	movlw	0x07		; turn off comparators
+	movwf	CMCON
+	clrf	PORTA		; set default values on PORTA and PORTB
+	clrf	PORTB
+	bcf	STATUS, IRP	; indirect addressing to page 0/1, not 2/3
+	; end standard init sequence
+
+	movlw	0xFA		; 500mS delay
+	call	delay_ms
+	movlw	0xFA
+	call	delay_ms
+
+	call	init_pwm
+	
+	banksel PORTA
+
+	call	init_variables
+
+	;; enable TMR0 interrupts
+	bsf	INTCON, T0IE	; enable TMR0
+	bsf	INTCON, GIE	; and turn on all interrupts.
+
+main_loop:
 	;; look for presses of either button. Delay, and do it again...
 	btfsc	MODEBUTTON
 	call	mode_button
