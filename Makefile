@@ -18,3 +18,6 @@ install: main.hex
 
 copy:
 	for i in *.asm *.inc *.lkr; do unixdos $$i /Volumes/share/$$i; done
+
+pull:
+	for i in *.asm *.inc *.lkr; do dosunix /Volumes/share/$$i $$i; done

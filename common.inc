@@ -3,7 +3,7 @@
 ;;; *
 
 ;; define the direction of the data registers...
-#define TRISA_DATA 0xF0 ; low 4 are output; high 4 are input.
+#define TRISA_DATA 0xF7 ; bit RA<3> is an output; the others are inputs.
 #define TRISB_DATA 0xFF ; set to all input. Yes. See comments re: 7-seg disp
 
 ;;; *********************************************************************

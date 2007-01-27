@@ -9,10 +9,10 @@
 	
 	include		"delay.inc"
 
-	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _XT_OSC )
+	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _LP_OSC )
 	;; first version of this used _INTRC_OSC_NOCLKOUT. Turned out to be
 	;; unstable based on room temperature. Now using XT_OSC. -- jorj
-	
+	;; moved to 32.768kHz low-power oscillator (LP_OSC).
 _ResetVector	set	0x00
 _InitVector	set	0x04
 
@@ -33,8 +33,8 @@ _InitVector	set	0x04
 #define INTERRUPTS_PER_SECOND 0x7D
 #endif
 
-#define MODEBUTTON PORTA, 5
-#define SETBUTTON PORTA, 4
+#define MODEBUTTON PORTA, 2
+#define SETBUTTON PORTA, 1
 
 #define ALARM_IN_MINUTES 0x3C	; how long the alarm light stays on (minutes)
 #define MODE_TIMEOUT 0x1E		; how long before 7-seg times out
@@ -192,9 +192,11 @@ INT_TMR0:
 	;; add 6 spare cycles to TMR0 (decreasing its length a bit) because
 	;; the clock freq isn't evenly divisible by 256 (into a second), but
 	;; works fine if we divide by 250.
+#ifndef SLOW_CLOCK
 	movlw	0x06
 	addwf	TMR0, F
-
+#endif
+	
 	incf	tmrcnt, F
 	movfw	tmrcnt
 	xorlw	INTERRUPTS_PER_SECOND
@@ -205,11 +207,11 @@ INT_TMR0:
 	clrf	tmrcnt		; reset the timer loop counter
 
 	;; ACTUAL START OF INTERRUPT 0 PROCESSING (once per second)
-	call pulsate_led ; DEBUGGING - FIXME - REMOVE
-	movfw	brightness ; DEBUGGING
-	call	display_digit ; DEBUGGING 
-	
-	movwf	mode_timer	; see if the mode timer has expired
+;;	call pulsate_led ; DEBUGGING - FIXME - REMOVE
+;;	movfw	brightness ; DEBUGGING
+;;	call	display_digit ; DEBUGGING 
+
+	movfw	mode_timer	; see if the mode timer has expired
 	xorlw	0x00
 	skpz
 	call	mode_timer_check ; only call it if mode_timer != 0
@@ -282,13 +284,13 @@ increase_brightness:
 set_brightness:
 	movfw	brightness
 	btfss	brightness, 0
-	bcf		CCP1CON, CCP1X
-	btfsc	brightness, 0
-	bsf		CCP1CON, CCP1X
-	btfss	brightness, 1
 	bcf		CCP1CON, CCP1Y
-	btfsc	brightness, 1
+	btfsc	brightness, 0
 	bsf		CCP1CON, CCP1Y
+	btfss	brightness, 1
+	bcf		CCP1CON, CCP1X
+	btfsc	brightness, 1
+	bsf		CCP1CON, CCP1X
 	
 	btfss	brightness, 2
 	bcf		CCPR1L, 0
@@ -298,6 +300,12 @@ set_brightness:
 	bcf		CCPR1L, 1
 	btfsc	brightness, 3
 	bsf		CCPR1L, 1
+	bcf		CCPR1L, 2
+	bcf		CCPR1L, 3
+	bcf		CCPR1L, 4
+	bcf		CCPR1L, 5
+	bcf		CCPR1L, 6
+	bcf		CCPR1L, 7
 	
 	return
 #else
@@ -606,19 +614,19 @@ set_button:
 	
 	;; everything else rolls over at 10 (the majority of cases)
 rollover_10:
-	movwf	INDF
+	movfw	INDF
 	xorlw	0x0A
 	skpnz
 	clrf	INDF		; set back to 0; it rolled over
 	goto	write_back_error
 rollover_6:
-	movwf	INDF
+	movfw	INDF
 	xorlw	0x06
 	skpnz
 	clrf	INDF		; set back to 0; it rolled over
 	goto	write_back_error
 rollover_3:
-	movwf	INDF
+	movfw	INDF
 	xorlw	0x03
 	skpnz
 	clrf	INDF		; set back to 0; it rolled over
@@ -626,13 +634,13 @@ rollover_3:
 
 write_back_error:
 	;; if we just changed the tens of error, then write it back to the eeprom
-	movwf	mode
+	movfw	mode
 	xorlw	0x0C
 	skpnz
 	call	write_error_tens	
 
 	;; if we just changed the ones of error, then write it back
-	movwf	mode
+	movfw	mode
 	xorlw	0x0D
 	skpnz
 	call	write_error_ones
@@ -640,6 +648,7 @@ write_back_error:
 	;; all done: go display the new digit and return
 	goto display_current_mode
 
+;; take the value at *FSR (INDF) and write it into the tens error
 write_error_tens:
 	movlw	EEPROM_TENS_ERROR
 	movwf	arg2
@@ -647,11 +656,24 @@ write_error_tens:
 	call	eep_write
 	return
 	
+;; take the value at *FSR (INDF) and write it into the tens error
 write_error_ones:
 	movlw	EEPROM_ONES_ERROR
 	movwf	arg2
 	movfw	INDF
 	call	eep_write
+	return
+
+;; reset the error value and update the EEPROM as well
+reset_eeprom:
+	clrf	tens_error
+;	movlw	tens_error
+;	movwf	FSR
+;	call	write_error_tens
+	clrf	ones_error
+;	movlw	ones_error
+;	movwf	FSR
+;	call	write_error_ones
 	return
 
 disable_trisb:
@@ -709,6 +731,25 @@ init_variables:
 	movlw	EEPROM_ONES_ERROR
 	call	eep_read
 	movwf	ones_error
+
+	;; if the default error rate is invalid, then reset it
+	movlw	0x03
+	movwf	arg2	; temp variable: if != 0 when done, then EEPROM_*_ERROR is invalid
+
+	movfw	tens_error
+	sublw	0x05
+	skpwgt				; if tens_error > 0x05, then skip
+	bcf		arg2, 0
+	
+	movfw	ones_error
+	sublw	0x09
+	skpwgt				; if ones_error > 0x09, then skip
+	bcf		arg2, 1
+
+	movfw	arg2		; if arg2 is still set at all, then we need to reset the eeprom
+	xorlw	0x00
+	skpz
+	call	reset_eeprom
 	
 	;; set the static display values for the 7-seg display
 	movlw	0x0C		; 'C' for 'Current'
@@ -717,6 +758,15 @@ init_variables:
 	movwf	time_alarm
 	movlw	0x0E		; 'E' for 'Error'
 	movwf	time_error
+
+	movlw	0x02
+	movwf	tens_hours
+	movlw	0x02
+	movwf	ones_hours
+	movlw	0x05
+	movwf	ones_alarm_hours
+	movlw	0x03
+	movwf	tens_alarm_minutes
 	
 	return
 	
@@ -784,9 +834,7 @@ Main:
 	bcf	STATUS, IRP	; indirect addressing to page 0/1, not 2/3
 	; end standard init sequence
 
-	movlw	0xFA		; 500mS delay
-	call	delay_ms
-	movlw	0xFA
+	movlw	0xFA		; 250mS delay
 	call	delay_ms
 
 	call	init_pwm

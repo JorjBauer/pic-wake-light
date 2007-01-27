@@ -47,7 +47,7 @@ loop1:
 	
 loop2:
 #if SLOW_CLOCK == 1
-	movlw	0x10		; slow
+	movlw	0x02		; slow
 #else
 	movlw	0xFF		; fast
 #endif
