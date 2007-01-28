@@ -66,6 +66,8 @@ eep_write:
 	bsf	EECON1, WR	; End of magic code
 	
 	bcf	EECON1, WREN	; Disable writes
+
+	bcf	STATUS, RP0
 	
 	btfsc	STATUS, C	; re-enable interrupts if they had been on
 	bsf	INTCON, GIE
