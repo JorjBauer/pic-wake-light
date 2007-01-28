@@ -113,7 +113,9 @@ tmrcnt		res	1	; counts interrupts to count out whole seconds
 brightness	res	1	; PWM brightness of the LED. 0 is off, and
 				; full brightness is INTERRUPTS_PER_SECOND.
 
-pulsate		res	1	; information on pulsate status (only 1 bit)
+pulsate		res	1	; information on pulsate status: <0> is on/off, <1> is test mode
+#define PULSATE_DIRECTION pulsate, 0
+#define PULSATE_TEST pulsate, 1
 
 mode		res	1	; current mode-button setting
 mode_timer	res	1	; how long before 7-segment display times out
@@ -206,10 +208,9 @@ INT_TMR0:
 	;; it's been a second (within the crystal's accuracy, at least).
 	clrf	tmrcnt		; reset the timer loop counter
 
-	;; ACTUAL START OF INTERRUPT 0 PROCESSING (once per second)
-;;	call pulsate_led ; DEBUGGING - FIXME - REMOVE
-;;	movfw	brightness ; DEBUGGING
-;;	call	display_digit ; DEBUGGING 
+	;; if the LED test mode is active, then pulsate the LED.
+	btfsc PULSATE_TEST
+	call	pulsate_led
 
 	movfw	mode_timer	; see if the mode timer has expired
 	xorlw	0x00
@@ -226,21 +227,21 @@ INT_TMR0:
 ;;; * This was used for initial debugging. I've left it because it's cool. :)
 
 pulsate_led:
-	btfss	pulsate, 0	; if bit0 is set, we're pulsating down
+	btfss	PULSATE_DIRECTION	; if bit0 is set, we're pulsating down
 	goto	pulsate_up
 pulsate_down:
 	movfw	brightness
 	xorlw	MIN_BRIGHTNESS
 	skpz
 	goto	decrease_brightness
-	bcf	pulsate, 0	; set to pulsate up next time
+	bcf	PULSATE_DIRECTION	; set to pulsate up next time
 	return
 pulsate_up:
 	movfw	brightness
 	xorlw	MAX_BRIGHTNESS
 	skpz
 	goto	increase_brightness
-	bsf	pulsate, 0	; set to pulsate down next time
+	bsf	PULSATE_DIRECTION	; set to pulsate down next time
 	return
 
 ;;; ************************************************************************
@@ -487,217 +488,6 @@ check_alarm_and_return:
 	goto	increase_alarm 	; and return when done
 
 ;;; ************************************************************************
-;;; *
-;;; * If the mode button is pressed, then call this. We cycle through the
-;;; * 7-segment-display modes, which are:
-;;; *	0: off
-;;; *	1: C  (stands for "Current")
-;;; *	2: clock hours, tens digit
-;;; *	3: clock hours, ones digit
-;;; *	4: clock minutes, tens digit
-;;; *	5: clock minutes, ones digit
-;;; *	6: A  (stands for "Alarm")
-;;; *	7: alarm hours, tens digit
-;;; *	8: alarm hours, ones digit
-;;; *	9: alarm minutes, tens digit
-;;; *	10: alarm minutes, ones digit
-;;; *	11: E (stands for "Error correction")
-;;; *	12: EC tens digit
-;;; *	13: EC ones digit
-;;; *
-;;; * Whenever the mode button is pressed, any alarm which is currently going
-;;; * off is cancelled. We also start a 30-second timer; if the timer expires
-;;; * without another button press, everything is set back to mode 0.
-;;; *
-;;; * The error correction is a number of seconds that are added to the clock
-;;; * at the top of every hour. 0 is probably correct, since we're crystal-
-;;; * controlled.
-
-mode_button:
-	call	turn_off_alarm	; turn off the alarm if it's going off.
-	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
-	movwf	mode_timer
-	
-	incf	mode, F		; move to the next mode
-	movfw	mode
-	xorlw	0x0E		; there are 13 modes. If we reach 14, turn off.
-	skpnz
-set_mode0:
-	clrf	mode		; set back to mode 0.
-
-	movfw	mode		; mode 0: disable TRISB and return
-	xorlw	0x00
-	skpnz
-	goto	disable_trisb
-
-;;; ************************************************************************
-;;; *
-;;; * show the current mode data on the 7-segment display. Note that we do
-;;; * this via INDF (the "pointer" indirect reference register) to keep the
-;;; * code simple. That requires that the variables be sequentially allocated
-;;; * in RAM. There's nothing currently forcing that to happen; the linker
-;;; * just happens to do it correctly at the moment.
-
-display_current_mode:	
-	;; not mode 0. Figure out what to display and display it!
-	movlw	time_current - 1 ; start of our data block
-	addwf	mode, W		; add the current mode to it
-	movwf	FSR
-	movfw	INDF		; grab indirected pointer data
-
-	goto display_digit	; display that digit and return
-
-;;; ************************************************************************
-;;; *
-;;; * On a press of the set button, we turn off the alarm and reset the
-;;; * mode timer (just like when the mode button is pressed). Then we see
-;;; * whether or not our current mode supports being changed. If it does, then
-;;; * increment the value by 1 and update the display.
-	
-set_button:
-	call	turn_off_alarm	; turn off the alarm if it's going off.
-	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
-	movwf	mode_timer
-	
-	;; see what mode we're in. If it's 2, 3, 4, 5 or 7, 8, 9, 10 or
-	;; 12 or 13 then increment the digit, roll over to zero. Update the
-	;; display.
-
-	movfw	mode
-	xorlw	0x00
-	skpnz
-	return			; if mode == 0, return
-	movfw	mode
-	xorlw	0x01
-	skpnz
-	return			; if mode == 1, return
-	movfw	mode
-	xorlw	0x06
-	skpnz
-	return			; if mode == 6, return
-	movfw	mode
-	xorlw	0x0B
-	skpnz
-	return			; if mode == 11, return
-
-	;; otherwise increment the pointed-to value, rolling over at 10,
-	;; update the display, and return
-
-	movlw	time_current - 1 ; start of our data block
-	addwf	mode, W		; add the current mode to it
-	movwf	FSR
-	incf	INDF, F 
-
-	;; figure out the rollover amount. Depends on what mode we're in. Most
-	;; roll over at 10, but some roll over at 3 or 6.
-	movfw	mode
-	xorlw	0x02		; mode 2 rolls over a 3 (tens hours).
-	skpnz
-	goto	rollover_3
-	movfw	mode
-	xorlw	0x07		; mode 7 also rolls over at 3 (tens hours alarm).
-	skpnz
-	goto	rollover_3
-	
-	movfw	mode
-	xorlw	0x04		; modes 4, 9, 12 roll over at 6 (tens of mins, secs)
-	skpnz
-	goto	rollover_6
-	movfw	mode
-	xorlw	0x09
-	skpnz
-	goto	rollover_6
-	movfw	mode
-	xorlw	0x0C
-	skpnz
-	goto	rollover_6
-	
-	;; everything else rolls over at 10 (the majority of cases)
-rollover_10:
-	movfw	INDF
-	xorlw	0x0A
-	skpnz
-	clrf	INDF		; set back to 0; it rolled over
-	goto	write_back_error
-rollover_6:
-	movfw	INDF
-	xorlw	0x06
-	skpnz
-	clrf	INDF		; set back to 0; it rolled over
-	goto	write_back_error
-rollover_3:
-	movfw	INDF
-	xorlw	0x03
-	skpnz
-	clrf	INDF		; set back to 0; it rolled over
-	;; fall through
-
-write_back_error:
-	;; if we just changed the tens of error, then write it back to the eeprom
-	movfw	mode
-	xorlw	0x0C
-	skpnz
-	call	write_error_tens	
-
-	;; if we just changed the ones of error, then write it back
-	movfw	mode
-	xorlw	0x0D
-	skpnz
-	call	write_error_ones
-	
-	;; all done: go display the new digit and return
-	goto display_current_mode
-
-;; take the value at *FSR (INDF) and write it into the tens error
-write_error_tens:
-	movlw	EEPROM_TENS_ERROR
-	movwf	arg2
-	movfw	INDF
-	call	eep_write
-	return
-	
-;; take the value at *FSR (INDF) and write it into the tens error
-write_error_ones:
-	movlw	EEPROM_ONES_ERROR
-	movwf	arg2
-	movfw	INDF
-	call	eep_write
-	return
-
-;; reset the error value and update the EEPROM as well
-reset_eeprom:
-	clrf	tens_error
-;	movlw	tens_error
-;	movwf	FSR
-;	call	write_error_tens
-	clrf	ones_error
-;	movlw	ones_error
-;	movwf	FSR
-;	call	write_error_ones
-	return
-
-disable_trisb:
-	movlw	0xFF		; set to all INPUTS
-	bcf	STATUS, RP1
-	bsf	STATUS, RP0	; TRISB is in page 1
-	movwf	TRISB
-	bcf	TRISB, 3	; ... but we don't care about TRISB<3> (b/c PWM)
-	bsf	TRISA, 3	; ... and we do care about TRISA<3> (substitute for B<3>)
-	bcf	STATUS, RP0	; back to page 0
-	clrf	PORTB
-	return	
-
-;;; ************************************************************************
-;;; *
-;;; * check the mode timer (only called when mode_timer != 0). If it reached
-;;; * 0 then set back to mode 0 and blank the display.
-
-mode_timer_check:
-	decfsz	mode_timer, F
-	return
-	goto	set_mode0	; if we reached 0, set back to mode0.
-			
-;;; ************************************************************************
 ;;; * init_variables
 ;;; *
 ;;; * initialize all variables to default values
@@ -836,6 +626,12 @@ Main:
 
 	movlw	0xFA		; 250mS delay
 	call	delay_ms
+	movlw	0xFA		; 250mS delay
+	call	delay_ms
+	movlw	0xFA		; 250mS delay
+	call	delay_ms
+	movlw	0xFA		; 250mS delay
+	call	delay_ms
 
 	call	init_pwm
 	
@@ -860,5 +656,228 @@ main_loop:
 	goto main_loop
 
 	
+;;; ************************************************************************
+;;; *
+;;; * If the mode button is pressed, then call this. We cycle through the
+;;; * 7-segment-display modes, which are:
+;;; *	0: off
+;;; *	1: C  (stands for "Current")
+;;; *	2: clock hours, tens digit
+;;; *	3: clock hours, ones digit
+;;; *	4: clock minutes, tens digit
+;;; *	5: clock minutes, ones digit
+;;; *	6: A  (stands for "Alarm")
+;;; *	7: alarm hours, tens digit
+;;; *	8: alarm hours, ones digit
+;;; *	9: alarm minutes, tens digit
+;;; *	10: alarm minutes, ones digit
+;;; *	11: E (stands for "Error correction")
+;;; *	12: EC tens digit
+;;; *	13: EC ones digit
+;;; *
+;;; * Whenever the mode button is pressed, any alarm which is currently going
+;;; * off is cancelled. We also start a 30-second timer; if the timer expires
+;;; * without another button press, everything is set back to mode 0.
+;;; *
+;;; * The error correction is a number of seconds that are added to the clock
+;;; * at the top of every hour. 0 is probably correct, since we're crystal-
+;;; * controlled.
+
+mode_button:
+	call	turn_off_alarm	; turn off the alarm if it's going off.
+	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
+	movwf	mode_timer
+	
+	incf	mode, F		; move to the next mode
+	movfw	mode
+	xorlw	0x0E		; there are 13 modes. If we reach 14, turn off.
+	skpnz
+set_mode0:
+	clrf	mode		; set back to mode 0.
+
+	movfw	mode		; mode 0: disable TRISB and return
+	xorlw	0x00
+	skpnz
+	goto	disable_trisb
+
+;;; ************************************************************************
+;;; *
+;;; * show the current mode data on the 7-segment display. Note that we do
+;;; * this via INDF (the "pointer" indirect reference register) to keep the
+;;; * code simple. That requires that the variables be sequentially allocated
+;;; * in RAM. There's nothing currently forcing that to happen; the linker
+;;; * just happens to do it correctly at the moment.
+
+display_current_mode:	
+	;; not mode 0. Figure out what to display and display it!
+	movlw	time_current - 1 ; start of our data block
+	addwf	mode, W		; add the current mode to it
+	movwf	FSR
+	movfw	INDF		; grab indirected pointer data
+
+	goto display_digit	; display that digit and return
+
+;;; ************************************************************************
+;;; *
+;;; * On a press of the set button, we turn off the alarm and reset the
+;;; * mode timer (just like when the mode button is pressed). Then we see
+;;; * whether or not our current mode supports being changed. If it does, then
+;;; * increment the value by 1 and update the display.
+	
+set_button:
+	call	turn_off_alarm	; turn off the alarm if it's going off.
+	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
+	movwf	mode_timer
+	
+	;; see what mode we're in. If it's 2, 3, 4, 5 or 7, 8, 9, 10 or
+	;; 12 or 13 then increment the digit, roll over to zero. Update the
+	;; display.
+
+	movfw	mode
+	xorlw	0x00
+	skpnz
+	return			; if mode == 0, return
+	movfw	mode
+	xorlw	0x01
+	skpnz
+	return			; if mode == 1, return
+	movfw	mode
+	xorlw	0x06
+	skpnz
+	return			; if mode == 6, return
+	movfw	mode
+	xorlw	0x0B	; is it mode 11?
+	skpz
+	goto	increment_selection	; not mode 11; skip to the normal increment code
+	; the 'E' mode (11) is a little strange. We use it to toggle the pulsate test mode.
+	btfss	PULSATE_TEST
+	goto	setit
+	bcf	PULSATE_TEST
+	return
+setit:
+	bsf	PULSATE_TEST
+	return
+
+increment_selection:
+	;; otherwise increment the pointed-to value, rolling over at 10,
+	;; update the display, and return
+
+	movlw	time_current - 1 ; start of our data block
+	addwf	mode, W		; add the current mode to it
+	movwf	FSR
+	incf	INDF, F 
+
+	;; figure out the rollover amount. Depends on what mode we're in. Most
+	;; roll over at 10, but some roll over at 3 or 6.
+	movfw	mode
+	xorlw	0x02		; mode 2 rolls over a 3 (tens hours).
+	skpnz
+	goto	rollover_3
+	movfw	mode
+	xorlw	0x07		; mode 7 also rolls over at 3 (tens hours alarm).
+	skpnz
+	goto	rollover_3
+	
+	movfw	mode
+	xorlw	0x04		; modes 4, 9, 12 roll over at 6 (tens of mins, secs)
+	skpnz
+	goto	rollover_6
+	movfw	mode
+	xorlw	0x09
+	skpnz
+	goto	rollover_6
+	movfw	mode
+	xorlw	0x0C
+	skpnz
+	goto	rollover_6
+	
+	;; everything else rolls over at 10 (the majority of cases)
+rollover_10:
+	movfw	INDF
+	xorlw	0x0A
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	goto	write_back_error
+rollover_6:
+	movfw	INDF
+	xorlw	0x06
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	goto	write_back_error
+rollover_3:
+	movfw	INDF
+	xorlw	0x03
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	;; fall through
+
+write_back_error:
+	;; if we just changed the tens of error, then write it back to the eeprom
+	movfw	mode
+	xorlw	0x0C
+	skpnz
+	call	write_error_tens	
+
+	;; if we just changed the ones of error, then write it back
+	movfw	mode
+	xorlw	0x0D
+	skpnz
+	call	write_error_ones
+	
+	;; all done: go display the new digit and return
+	goto display_current_mode
+
+;; take the value at *FSR (INDF) and write it into the tens error
+write_error_tens:
+	movlw	EEPROM_TENS_ERROR
+	movwf	arg2
+	movfw	INDF
+	call	eep_write
+	return
+	
+;; take the value at *FSR (INDF) and write it into the tens error
+write_error_ones:
+	movlw	EEPROM_ONES_ERROR
+	movwf	arg2
+	movfw	INDF
+	call	eep_write
+	return
+
+;; reset the error value and update the EEPROM as well
+reset_eeprom:
+	clrf	tens_error
+	clrf	ones_error
+
+	movlw	EEPROM_TENS_ERROR
+	movwf	arg2
+	movlw	0x00
+	call	eep_write
+	movlw	EEPROM_ONES_ERROR
+	movwf	arg2
+	movlw	0x00
+	goto	eep_write	; and return
+
+disable_trisb:
+	movlw	0xFF		; set to all INPUTS
+	bcf	STATUS, RP1
+	bsf	STATUS, RP0	; TRISB is in page 1
+	movwf	TRISB
+	bcf	TRISB, 3	; ... but we don't care about TRISB<3> (b/c PWM)
+	bsf	TRISA, 3	; ... and we do care about TRISA<3> (substitute for B<3>)
+	bcf	STATUS, RP0	; back to page 0
+	clrf	PORTB
+	return	
+
+;;; ************************************************************************
+;;; *
+;;; * check the mode timer (only called when mode_timer != 0). If it reached
+;;; * 0 then set back to mode 0 and blank the display.
+
+mode_timer_check:
+	decfsz	mode_timer, F
+	return
+	goto	set_mode0	; if we reached 0, set back to mode0.
+			
+
 	END
 	
