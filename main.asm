@@ -209,7 +209,7 @@ INT_TMR0:
 	clrf	tmrcnt		; reset the timer loop counter
 
 	;; if the LED test mode is active, then pulsate the LED.
-	btfsc PULSATE_TEST
+	btfsc	PULSATE_TEST
 	call	pulsate_led
 
 	movfw	mode_timer	; see if the mode timer has expired
@@ -273,13 +273,15 @@ turn_off_led:
 ;;; *
 ;;; * When running with a slow clock (32.768kHz), the PWM only has about 5 bits
 ;;; * of resolution so the lookup table is useless. We use brightness directly,
-;;; * and have to set the low 2 bits in CCP1[XY] and the low 2 bits in CCPR1L.
+;;; * and have to set the low 2 bits in CCP1[YX] from the low 2 bits of data,
+;;; * and the low 2 bits of  CCPR1L get the high 2 bits of data.
 
 increase_brightness:
 	movfw	brightness
 	xorlw	MAX_BRIGHTNESS
 	skpz
 	incf	brightness, F
+	
 #if SLOW_CLOCK
 ;;; set_brightness for 32.768kHz:
 set_brightness:
@@ -410,17 +412,15 @@ run_clock:
 	movfw	ones_minutes
 	xorlw	0x0A
 	skpz
-	return	;not 60 secs, so continue
-	
-	call	check_alarm_and_return	; at top of every minute, increase alarm if req'd
-
+	goto	check_alarm_and_return	; at top of every minute, increase alarm if req'd
+		
 	;; ones-of-minutes rollover
 	clrf	ones_minutes
 	incf	tens_minutes, F
 	movfw	tens_minutes
 	xorlw	0x06
 	skpz
-	goto	check_alarm_and_return
+	goto	check_alarm_and_return	; at top of every minute, increase alarm if req'd
 
 	;; 60 minutes hit. Adjust for the hourly error rate (per config)
 	movfw	tens_error
@@ -445,17 +445,18 @@ check_for_midnight:
 	movfw	tens_hours
 	xorlw	0x02
 	skpz
-	goto	check_alarm_and_return
+	goto	check_alarm_and_return	; at top of every minute, increase alarm if req'd
 	movfw	ones_hours
 	xorlw	0x04
 	skpz
-	goto	check_alarm_and_return
+	goto	check_alarm_and_return	; at top of every minute, increase alarm if req'd
 
 	;; reached the end of the day (24:00:00)
 	clrf	ones_hours
 	clrf	tens_hours
-	return
-
+;	goto	check_alarm_and_return	; at top of every minute, increase alarm if req'd
+	;;  fall through...
+	
 check_alarm_and_return:
 	;; if the alarm is already running, then keep running it.
 	movfw	alarming
