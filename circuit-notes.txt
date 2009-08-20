@@ -1,0 +1,10 @@
+MAX1674 circuit:
+
+pin 1 -> GND (5V select)
+pin 2 -> N/C (low battery)
+pin 3 -> N/C (/LBO)
+pin 4 -> 0.1uF -> GND
+pin 5 -> 10k -> V+
+pin 6 -> GND
+pin 7 -> 22uH -> input (w/ parallel 47uF filter cap)
+pin 8 -> out (w/ parallel 47uF filter cap)

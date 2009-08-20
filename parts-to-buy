@@ -1,0 +1,9 @@
+65.536 kHz oscillator, 12.5pF
+	2x 12.5pF caps
+		... then reset the delay loop and the interrupt timer.
+
+
+
+7-segment LED display (or multiple?)
+
+-- if building this as a larger device, use an LCD w/ backlight?

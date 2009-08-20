@@ -791,7 +791,27 @@ increment_selection:
 	xorlw	0x0C
 	skpnz
 	goto	rollover_6
-	
+
+	;; modes 3 and 8 roll over at 10, unless the mode before it == 2,
+	;; in which case they roll over at 4 (ones hours alarms).
+	movfw	mode
+	xorlw	0x03
+	skpnz
+	goto	rollover_4_or_10
+	movfw	mode
+	xorlw	0x08
+	skpz
+	goto	rollover_10
+rollover_4_or_10:
+	decf	FSR, f		; look at the digit before this one
+	movfw	INDF
+	movwf	arg2		; arg2 used as temp storage
+	incf	FSR, f		; put it back the way we found it
+	movfw	arg2
+	xorlw	0x02		; is the previous digit a 2?
+	skpnz
+	goto	rollover_4	; yes: rollover at 4. Otherwise fall thru.
+				
 	;; everything else rolls over at 10 (the majority of cases)
 rollover_10:
 	movfw	INDF
@@ -802,6 +822,12 @@ rollover_10:
 rollover_6:
 	movfw	INDF
 	xorlw	0x06
+	skpnz
+	clrf	INDF		; set back to 0; it rolled over
+	goto	write_back_error
+rollover_4:
+	movfw	INDF
+	xorlw	0x04
 	skpnz
 	clrf	INDF		; set back to 0; it rolled over
 	goto	write_back_error
