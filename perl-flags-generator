@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+
+# Very simplistic script to figure out what the correct code flags are for 
+# our app. picp isn't smart enough to figure out how to program the flags 
+# based on what we have in the main.hex file. So we'll peek into that file 
+# from here, and figure out the right settings.
+
+use strict;
+use warnings;
+
+my $file = shift || die "No filename provided";
+
+my $fh;
+open($fh, $file)
+    || die "Unable to open $file: $!";
+
+my $flags = 0;
+
+while (<$fh>) {
+    if (/^:02400E00(..)(..)(..)$/) {
+	$flags = (hex($2) << 8) | hex($1);
+    }
+}
+
+die "Unable to parse flags"
+    unless $flags;
+
+print sprintf("0x%X\n", $flags);
+
