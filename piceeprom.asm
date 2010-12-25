@@ -1,11 +1,9 @@
-	Processor	16f628a
-	Radix		DEC
-	EXPAND
+        include         "processor_def.inc"
 
-	include		"p16f628a.inc"
 	include		"common.inc"
 	include		"globals.inc"
-
+	include		"memory.inc"
+	
 	GLOBAL	eep_read
 	GLOBAL	eep_write
 

@@ -1,11 +1,9 @@
-	Processor	16f628a
-	Radix		DEC
-	EXPAND
+        include         "processor_def.inc"
 
-	include		"p16f628a.inc"
 	include		"common.inc"
 	include		"piceeprom.inc"
 	include		"globals.inc"
+	include		"memory.inc"
 	
 	include		"delay.inc"
 
@@ -13,6 +11,7 @@
 	;; first version of this used _INTRC_OSC_NOCLKOUT. Turned out to be
 	;; unstable based on room temperature. Now using XT_OSC. -- jorj
 	;; moved to 32.768kHz low-power oscillator (LP_OSC).
+	;; Trying an internal oscillator (_INTOSC_OSC_NOCLKOUT).
 _ResetVector	set	0x00
 _InitVector	set	0x04
 
@@ -100,29 +99,8 @@ _InitVector	set	0x04
 #define PR2_VALUE 0xFF
 #endif
 
-;;; ************************************************************************
-;;; * VARIABLES
-
-	udata
-
-save_w	res	1		; used to save regs in interrupt svc routine
-save_status	res	1	; used to save regs in interrupt svc routine
-save_pclath	res	1	; used to save regs in interrupt svc routine
-tmrcnt		res	1	; counts interrupts to count out whole seconds
-	
-brightness	res	1	; PWM brightness of the LED. 0 is off, and
-				; full brightness is INTERRUPTS_PER_SECOND.
-
-pulsate		res	1	; information on pulsate status: <0> is on/off, <1> is test mode
 #define PULSATE_DIRECTION pulsate, 0
 #define PULSATE_TEST pulsate, 1
-
-mode		res	1	; current mode-button setting
-mode_timer	res	1	; how long before 7-segment display times out
-
-alarming	res	1	; alarm state
-	
-rollover	res	1	; temporary rollover pointer
 
 #define EEPROM_TENS_ERROR 0x00	; eeprom location 0x00
 #define EEPROM_ONES_ERROR 0x01	; eeprom location 0x01
@@ -131,7 +109,7 @@ rollover	res	1	; temporary rollover pointer
 	code
 
 	ORG	_ResetVector
-	goto	Main
+	lgoto	Main
 
 	ORG	_InitVector
 	goto	Interrupt
@@ -626,20 +604,35 @@ Main:
 	; end standard init sequence
 
 	movlw	0xFA		; 250mS delay
-	call	delay_ms
+	lcall	delay_ms
 	movlw	0xFA		; 250mS delay
-	call	delay_ms
+	lcall	delay_ms
 	movlw	0xFA		; 250mS delay
-	call	delay_ms
+	lcall	delay_ms
 	movlw	0xFA		; 250mS delay
-	call	delay_ms
+	lcall	delay_ms
 
-	call	init_pwm
+	lcall	init_pwm
 	
 	banksel PORTA
 
-	call	init_variables
+	lcall	init_variables
 
+start_of_debug:	
+	movlw	MAX_BRIGHTNESS
+	lcall	set_brightness
+	clrf	ones_hours
+debug_loop:
+	movfw	ones_hours
+	fcall	display_digit
+	btfss	MODEBUTTON
+	goto	$-1
+	incf	ones_hours, F
+	btfsc	MODEBUTTON
+	goto	$-1
+	goto	debug_loop
+end_of_debug:	
+	
 	;; enable TMR0 interrupts
 	bsf	INTCON, T0IE	; enable TMR0
 	bsf	INTCON, GIE	; and turn on all interrupts.
@@ -647,14 +640,14 @@ Main:
 main_loop:
 	;; look for presses of either button. Delay, and do it again...
 	btfsc	MODEBUTTON
-	call	mode_button
+	lcall	mode_button
 	btfsc	SETBUTTON
-	call	set_button
+	lcall	set_button
 
 	movlw	0xFA		; delay 250mS
-	call	delay_ms
+	lcall	delay_ms
 	
-	goto main_loop
+	lgoto main_loop
 
 	
 ;;; ************************************************************************
@@ -685,7 +678,7 @@ main_loop:
 ;;; * controlled.
 
 mode_button:
-	call	turn_off_alarm	; turn off the alarm if it's going off.
+	lcall	turn_off_alarm	; turn off the alarm if it's going off.
 	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
 	movwf	mode_timer
 	
@@ -699,7 +692,7 @@ set_mode0:
 	movfw	mode		; mode 0: disable TRISB and return
 	xorlw	0x00
 	skpnz
-	goto	disable_trisb
+	lgoto	disable_trisb
 
 ;;; ************************************************************************
 ;;; *
@@ -716,7 +709,7 @@ display_current_mode:
 	movwf	FSR
 	movfw	INDF		; grab indirected pointer data
 
-	goto display_digit	; display that digit and return
+	lgoto display_digit	; display that digit and return
 
 ;;; ************************************************************************
 ;;; *
@@ -726,7 +719,7 @@ display_current_mode:
 ;;; * increment the value by 1 and update the display.
 	
 set_button:
-	call	turn_off_alarm	; turn off the alarm if it's going off.
+	fcall	turn_off_alarm	; turn off the alarm if it's going off.
 	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
 	movwf	mode_timer
 	
@@ -859,7 +852,7 @@ write_error_tens:
 	movlw	EEPROM_TENS_ERROR
 	movwf	arg2
 	movfw	INDF
-	call	eep_write
+	lcall	eep_write
 	return
 	
 ;; take the value at *FSR (INDF) and write it into the tens error
@@ -867,7 +860,7 @@ write_error_ones:
 	movlw	EEPROM_ONES_ERROR
 	movwf	arg2
 	movfw	INDF
-	call	eep_write
+	lcall	eep_write
 	return
 
 ;; reset the error value and update the EEPROM as well
@@ -878,11 +871,11 @@ reset_eeprom:
 	movlw	EEPROM_TENS_ERROR
 	movwf	arg2
 	movlw	0x00
-	call	eep_write
+	lcall	eep_write
 	movlw	EEPROM_ONES_ERROR
 	movwf	arg2
 	movlw	0x00
-	goto	eep_write	; and return
+	lgoto	eep_write	; and return
 
 disable_trisb:
 	movlw	0xFF		; set to all INPUTS
@@ -903,7 +896,7 @@ disable_trisb:
 mode_timer_check:
 	decfsz	mode_timer, F
 	return
-	goto	set_mode0	; if we reached 0, set back to mode0.
+	lgoto	set_mode0	; if we reached 0, set back to mode0.
 			
 
 	END

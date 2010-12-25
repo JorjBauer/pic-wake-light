@@ -1,6 +1,7 @@
-LINKSCRIPT = link.lkr
+PIC = 16f628a
+LINKSCRIPT = /usr/local/share/gputils/lkr/$(PIC).lkr
 
-OBJECTS = delay.o globals.o piceeprom.o
+OBJECTS = delay.o piceeprom.o memory.o
 
 # Keyspan 19-HS serial dongle on MacOS X
 #SERIALDEV = /dev/tty.KeySerial1
@@ -20,10 +21,11 @@ clean:
 	rm -f *~ *.o *.lst *.map *.hex *.cod *.cof
 
 install: main.hex
-	picp $(SERIALDEV) 16f628a -ef && picp $(SERIALDEV) 16f628a -wc `./perl-flags-generator main.hex` -s -wp main.hex
+	picp $(SERIALDEV) $(PIC) -ef && picp $(SERIALDEV) $(PIC) -wc `./perl-flags-generator main.hex` -s -wp main.hex
 
-copy:
-	for i in *.asm *.inc *.lkr; do unixdos $$i /Volumes/share/$$i; done
+memory.hint:
+	./build-hints.pl > memory.hint
 
-pull:
-	for i in *.asm *.inc *.lkr; do dosunix /Volumes/share/$$i $$i; done
+disassemble: main.hex
+	pic-disassemble -d -D 4 -a -s -I .string -S dummy:\.org:^_ -i main.hex -m main.map -g main.gif
+

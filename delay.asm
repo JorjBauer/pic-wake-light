@@ -1,19 +1,11 @@
-	Processor	16f628a
-	Radix		DEC
-	EXPAND
+	include		"processor_def.inc"
 
-	include		"p16f628a.inc"
 	include		"common.inc"
 	include		"globals.inc"
-
+	include		"memory.inc"
+	
 	GLOBAL	delay_ms
 
-;;; ************************************************************************
-	udata
-delay1	res	1
-delay2	res	1
-delay3	res	1
-	
 ;;; ************************************************************************
 	code
 	
@@ -23,50 +15,46 @@ delay3	res	1
 ;;; * Input
 ;;; *	W:	contains number of milliseconds to delay
 ;;; *
-;;; * This function is tuned for a 2MHz processor. Other speeds will
-;;; * need to have the magic constant tweaked.
-;;; *
 ;;; * Each instruction takes (4 / speed) seconds, unless it branches and then
-;;; * it's (8 / speed) seconds. So each is about 108.1uS at 37kHz. Multiply by
-;;; * 10 should get us into the right ballpark (about 10mS).
-;;; * ... and at 2MHz we need about 512 times.
+;;; * it's (8 / speed) seconds. So each is about 108.1uS at 37kHz.
 ;;; *
-;;; *  NOTE: I don't know that this is exactly one mS! I haven't done the
-;;; *  math. If you want exactly 1 mS, do the math!
+;;; * At 48kHz, each instruction is .0000833 seconds (.083333 mS). 12 cycles
+;;; * are exactly 1mS.
+;;; *
+;;; * At 32.768kHz, each instruction is .0001220703125 seconds. 8 cycles are
+;;; * .9765625mS, and 9 are 1.0986328125 mS. 10 are obviously ~1.22mS.
 ;;; ************************************************************************
 
 	
+;;; Inner loop: 2 cycles startup + (3 * delay2)-1
+;;; Outer loop: 1 + (((Inner loop's delay) + 3) * delay1) - 1
+;;; Total delay: (((3*delay2)+4)*delay1)
+;;; 
+;;; Target number of inner cycles for one mS: .001/(4/clock speed)
+	
 delay_ms:
-	movwf	delay1
 
-loop1:
-#if SLOW_CLOCK == 0
-	movlw	0x01
-	movwf	delay2
-#endif
+;;; So, taking the total delay formula from above, we can turn it in to this:
+#define DELAY2 ((((0.001/(4/CLOCK))-4)/3)+1)
+
+;;; Would be nice to make this check here...
+;;; #if (DELAY2 > 255)
+;;; #error Delay too long for a one-byte timer!
+;;; #endif
+
+	movwf	delay1		; 1 cycle
 	
+loop1:	
+	movlw	0x03		; 1 cycle
+	movwf	delay2		; 1 cycle
 loop2:
-#if SLOW_CLOCK == 1
-	movlw	0x02		; slow
-#else
-	movlw	0xFF		; fast
-#endif
-	movwf	delay3
-	
-loop3:
-	decfsz	delay3, F
-	goto	loop3
+	decfsz	delay2, F	; Inner loop: 3 cycles*delay2-1 cycle
+	goto	loop2		;  (1 cycle for decfsz, 2 more for goto)
 
-#if SLOW_CLOCK == 0
-	decfsz	delay2, F
-	goto	loop2
-#endif
+	decfsz	delay1, F	; 2 cycles (1 from previous decfsz)
+	goto	loop1		; 2 cycles
 
-	decfsz	delay1, F
-	goto	loop1
-
-	return
-	
+	return			; 3 cycles (2 for goto, 1 from prev. decfsz)
 
 	END
 	

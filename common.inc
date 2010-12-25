@@ -24,3 +24,15 @@
 #define skpwgt  skpnc
 #define SKPWLE SKPC
 #define skpwle skpc
+
+;;; * fcall <subroutine>
+;;; *
+;;; * sets up pagesel appropriately for subroutine (using 'lcall'), and
+;;; * sets pagesel properly on return
+;;; *
+fcall macro subroutine_name
+      local dummy_fcall
+      lcall subroutine_name
+      pagesel dummy_fcall
+dummy_fcall:
+        endm
