@@ -7,7 +7,7 @@
 	
 	include		"delay.inc"
 
-	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _LP_OSC )
+	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _INTOSC_OSC_NOCLKOUT )
 	;; first version of this used _INTRC_OSC_NOCLKOUT. Turned out to be
 	;; unstable based on room temperature. Now using XT_OSC. -- jorj
 	;; moved to 32.768kHz low-power oscillator (LP_OSC).
