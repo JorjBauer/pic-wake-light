@@ -7,11 +7,13 @@
 	
 	include		"delay.inc"
 
-	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _INTOSC_OSC_NOCLKOUT )
+	__CONFIG ( _CP_OFF & _DATA_CP_OFF & _LVP_OFF & _BODEN_OFF & _MCLRE_OFF & _PWRTE_ON & _WDT_OFF & _LP_OSC )
 	;; first version of this used _INTRC_OSC_NOCLKOUT. Turned out to be
-	;; unstable based on room temperature. Now using XT_OSC. -- jorj
-	;; moved to 32.768kHz low-power oscillator (LP_OSC).
-	;; Trying an internal oscillator (_INTOSC_OSC_NOCLKOUT).
+	;; unstable based on room temperature. Used XT_OSC @ 2MHz for first
+	;; version. Moved to 32.768kHz low-power oscillator (LP_OSC), by
+	;; way of _INTOSC_OSC_NOCLKOUT @48kHz. (Need the relatively
+	;; temperature-invariant accuracy of a crystal.)
+
 _ResetVector	set	0x00
 _InitVector	set	0x04
 
@@ -26,10 +28,21 @@ _InitVector	set	0x04
 ;;; * For 32768Hz clock, we cycle all 256 at a 1:1 prescaler which gives us
 ;;; * 32 interrupts per second (0x20).
 ;;; ************************************************************************
-#if SLOW_CLOCK
+#if CLOCK==32768
+#define PR2_VALUE 0x08
 #define INTERRUPTS_PER_SECOND 0x20
-#else
+#define SLOW_CLOCK_CYCLES 0
+#endif
+#if CLOCK==48000
+;;; preload 6, so we get exactly 48 interrupts per second
+#define INTERRUPTS_PER_SECOND 0x30
+#define PR2_VALUE 0x08
+#define SLOW_CLOCK_CYCLES 6
+#endif
+#if CLOCK==2000000
 #define INTERRUPTS_PER_SECOND 0x7D
+#define PR2_VALUE 0xFF
+#define SLOW_CLOCK_CYCLES 6
 #endif
 
 #define MODEBUTTON PORTA, 2
@@ -37,6 +50,7 @@ _InitVector	set	0x04
 
 #define ALARM_IN_MINUTES 0x3C	; how long the alarm light stays on (minutes)
 #define MODE_TIMEOUT 0x1E		; how long before 7-seg times out
+#define MODE_CHANGE_DELAY_TIME (INTERRUPTS_PER_SECOND/4)		; how many interrupts for mode-change blanking
 
 #define MIN_BRIGHTNESS 0x00
 #define MAX_BRIGHTNESS 0x0F
@@ -93,12 +107,6 @@ _InitVector	set	0x04
 ;;; *
 ;;; ************************************************************************
 
-#if SLOW_CLOCK
-#define PR2_VALUE 0x08
-#else
-#define PR2_VALUE 0xFF
-#endif
-
 #define PULSATE_DIRECTION pulsate, 0
 #define PULSATE_TEST pulsate, 1
 
@@ -150,6 +158,17 @@ check_int:
 	btfsc	INTCON, T0IF
 	goto	INT_TMR0	; yes; branch
 
+	;; If we're currently delaying a mode change, then decrement the
+	;; counter and fire the mode change when we reach zero.
+	movfw	mode_change_delay
+	addlw	0
+	skpnz
+	goto	done_int
+	decfsz	mode_change_delay, F
+	goto	done_int
+	;; reached zero. Trigger the actual mode change.
+	lcall	perform_mode_change
+
 	;; not TMR0; restore state and exit
 
 done_int:	
@@ -172,8 +191,8 @@ INT_TMR0:
 	;; add 6 spare cycles to TMR0 (decreasing its length a bit) because
 	;; the clock freq isn't evenly divisible by 256 (into a second), but
 	;; works fine if we divide by 250.
-#ifndef SLOW_CLOCK
-	movlw	0x06
+#if SLOW_CLOCK_CYCLES
+	movlw	SLOW_CLOCK_CYCLES
 	addwf	TMR0, F
 #endif
 	
@@ -479,6 +498,7 @@ init_variables:
 	clrf	pulsate
 	clrf	mode
 	clrf	alarming
+	clrf	mode_change_delay
 	
 	clrf	tens_hours
 	clrf	ones_hours
@@ -587,7 +607,7 @@ Main:
 	bcf TRISB, 3    ; (enable PWM explicitly)
 	bsf	TRISA, 3	; (and substitute A<3> for B<3>)
     ;; if we needed to set the internal oscillator speed, we'd do it here
-    ;; bsf PCON, OSCF ; set for high-speed, clear for low-speed
+	bcf PCON, OSCF ; set for high-speed, clear for low-speed
 #if SLOW_CLOCK
 	; by setting the prescaler to the WDT, it makes TMR0 use no prescaler
     movlw	NO_RBPU | NO_INTEDG | T0CS_INTERNAL | PRESCALER_WDT_1
@@ -618,9 +638,11 @@ Main:
 
 	lcall	init_variables
 
-start_of_debug:	
+#if 0
+start_of_debug:
 	movlw	MAX_BRIGHTNESS
 	lcall	set_brightness
+
 	clrf	ones_hours
 debug_loop:
 	movfw	ones_hours
@@ -632,6 +654,7 @@ debug_loop:
 	goto	$-1
 	goto	debug_loop
 end_of_debug:	
+#endif
 	
 	;; enable TMR0 interrupts
 	bsf	INTCON, T0IE	; enable TMR0
@@ -681,7 +704,16 @@ mode_button:
 	lcall	turn_off_alarm	; turn off the alarm if it's going off.
 	movlw	MODE_TIMEOUT	; we'll leave the current mode on for 30 secs
 	movwf	mode_timer
+
+	;; set a delay to change the mode timer, blanking the display before.
+	;; This gives a visual indicator that the button press was seen.
 	
+	lcall	disable_trisb	; will disable display
+	movlw	MODE_CHANGE_DELAY_TIME
+	movwf	mode_change_delay
+	return
+	
+perform_mode_change:	
 	incf	mode, F		; move to the next mode
 	movfw	mode
 	xorlw	0x0E		; there are 13 modes. If we reach 14, turn off.
@@ -691,8 +723,9 @@ set_mode0:
 
 	movfw	mode		; mode 0: disable TRISB and return
 	xorlw	0x00
+	pagesel	disable_trisb
 	skpnz
-	lgoto	disable_trisb
+	goto	disable_trisb
 
 ;;; ************************************************************************
 ;;; *

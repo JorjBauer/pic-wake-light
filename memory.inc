@@ -26,6 +26,8 @@
 #define	      delay2			0x41
 #define	      delay3			0x42
 
+#define mode_change_delay 0x43
+
 ;;; service routine variables
 #define	      save_w	  0x70
 #define	      save_status 0x71
