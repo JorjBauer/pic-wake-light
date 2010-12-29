@@ -120,3 +120,24 @@ pin 5 of the PIC). You can probably get away without the capacitors
 with some loss of stability of the crystal. Once the crystal is in
 place the way you want it, I'd recommend glueing it in place (either
 cyanoacrylate or hot melt).
+
+Programming the PIC
+-------------------
+
+I've included a pre-built version of the firmware (prebuilt.hex),
+which you can use directly. You should be able to program the PIC
+using any standard PIC programmer. If you want to use picp and have it
+installed, you can simply do a "make install-prebuilt" (assuming that
+the Makefile is pointing at the right serial device for your
+programmer).
+
+If you want to built your own, you'll need gpasm installed. The
+Makefile assumes that the correct gpasm linker script can be found in
+/usr/local/share/gputils/lkr/16f628a.lkr. Modify the Makefile as
+necessary to adjust, and then use 'make' to build the .hex file and
+'make install' to install main.hex via picp.
+
+One quick note: DO NOT rely on a SVN checkout of gpasm. I made that
+mistake while trying to update this documentation, and it produced
+very broken code. (I wound up using 0.13.7 on an Intel MacBook Pro
+running OS 10.6. This combination worked great.)

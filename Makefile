@@ -23,6 +23,9 @@ clean:
 install: main.hex
 	picp $(SERIALDEV) $(PIC) -ef && picp $(SERIALDEV) $(PIC) -wc `./perl-flags-generator main.hex` -s -wp main.hex
 
+install-prebuilt:
+	picp $(SERIALDEV) $(PIC) -ef && picp $(SERIALDEV) $(PIC) -wc 0x3F00 -s -wp prebuilt.hex
+
 memory.hint:
 	./build-hints.pl > memory.hint
 
