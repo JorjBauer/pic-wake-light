@@ -1,6 +1,19 @@
 General Notes
 -------------
 
+This project is a PIC-based wake-light timer. It uses blue LEDs as a
+wake light, and is designed to be integrated in to a sleeping mask (so
+that you can wake up with a wake-light without waking up other people
+in the same room). I had reasonable success with this mask on Amazon:
+
+   http://www.amazon.com/Dream-Essentials-Mind-Fold-Relaxation/dp/B000M3HEMC/ref=sr_1_15?ie=UTF8&qid=1293584763&sr=8-15
+
+... while it looks really cheap, it *is*. And that's its benefit. It
+was easy to slide two LEDs inside the foam without affecting the parts
+that touch your face.
+
+
+
 There are two mistakes on the v1.3 PCB:
 
 1. No crystal. Oops. Solder it, and its capacitors, on the bottom side.
@@ -21,18 +34,18 @@ them too. This is < $20 in parts (probably < $15).
 
 qty  p/n			description
 ---  ---			-----------
-1    647-UPS1C151MED		150uF capacitor
-1    647-UVZ1E101MED1DU 	100uF capacitor
-1    140-50U5-104M-TB-RC	0.1uF ceramic disc capacitor
-2    71-CCF071K00JKE36		1.0k 1/4w resistor
-1    71-CCF0710K0JKE36		10k 1/4w resistor
+1    647-UPS1C151MED		[C1] 150uF capacitor
+1    647-UVZ1E101MED1DU 	[C2] 100uF capacitor
+1    140-50U5-104M-TB-RC	[C3] 0.1uF ceramic disc capacitor
+2    71-CCF071K00JKE36		[R1,R4] 1.0k 1/4w resistor
+2    71-CCF0710K0JKE36		[R2,R3] 10k 1/4w resistor
 1    696-LDS-A354RI		Lumex 7.6mm common anode 7-segment LED
 1    579-PIC16F628A-I/P		PIC 16f628A, DIP package
 1    534-2460			PC mount AA battery holder
 2    101-0161-EV		Tactile Switch 6x6mm
 1    517-4818-3000-CP		18 pin DIP socket
-1    821-SS12			SMA 1A 20V schottky do-41 diode
-1    652-RLB9012-220KL		22uH 10% 2.4A radial inductor
+1    821-SS12			[D1] SMA 1A 20V schottky do-41 diode
+1    652-RLB9012-220KL		[L1] 22uH 10% 2.4A radial inductor
 1    700-MAX756CSA		Maxim MAX756 step-up power regulator
 
 1    COM-00540 (*)		[from sparkfun.com] 32.768 kHz watch crystal
@@ -65,12 +78,45 @@ Assembly
 
 This is a fairly easy build, aside from my mistakes on the PCB printing.
 
+A word about orientation: hold the board so that the battery will be
+at the bottom. In this orientation, the 7-segment LED will be
+installed so that it is right-side-up (the decimal point is in the
+lower-right), with the two switches on its right. The switches will be
+installed so that they "grip" vertically (the tines bend inward toward
+the top and bottom, not the left and right). The PIC's notch needs to
+be toward the top. Pay attention to the '+' markings for C1 and
+C2. The diode should have its stripe on the left. And the MAX756 will
+be installed so that its Pin #1 (with the dot next to it) will be in
+the upper-right.
+
+Before installing any of that, I'd prepare the board so that it will
+fit in your enclosure. You can round off the corners and fit it in an
+Altoids gum tin.
+
 I'd recommend starting with the surface-mount parts (the MAX756 in
 particular) and then working through the socket; 7-segment LED;
 switches; inductor; capacitors; resistors. The oscillator and its two
 caps should be soldered at the end, along with the LEDs.
 
 If you want one of the switches mounted on the outside of your
-enclosure, you'll want to skip that switch until then end, too.
+enclosure, you'll want to skip that switch until then end,
+too. (Solder wires to one hole on the upper-left and one hole on the
+upper-right side of where the switch would have been. The lower two
+holes aren't connected to anything on the PCB. And the left button is
+the mode button; that's probably the one you want outside your
+enclosure.)
 
-The LEDs should be connected in parallel.
+Finally, the LEDs should be jumped off of the two points just under
+the switches. GND and + are labeled. (Okay, this qualifies as a third
+error on the PCB; this jumper should *not* be in the middle of the
+PCB. What was I thinking???)
+
+After you connect the wires for your LEDs, just connect the LEDs in
+parallel as you find fits your application.
+
+The crystal needs to be soldered to pins 15 and 16 of the PIC, with
+capacitors between each leg of the crystal and ground (conveniently,
+pin 5 of the PIC). You can probably get away without the capacitors
+with some loss of stability of the crystal. Once the crystal is in
+place the way you want it, I'd recommend glueing it in place (either
+cyanoacrylate or hot melt).
