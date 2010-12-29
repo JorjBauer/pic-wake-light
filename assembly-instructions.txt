@@ -1,0 +1,76 @@
+General Notes
+-------------
+
+There are two mistakes on the v1.3 PCB:
+
+1. No crystal. Oops. Solder it, and its capacitors, on the bottom side.
+
+2. The drill holes are the wrong size for inductor's leads. Oops
+again. The current running through the inductor is relatively low, so
+I accepted the size and spent 20 minutes whittling down the leads on a
+22uH inductor so they'd fit in the teeny holes. And then soldering the
+inductor on both sides of the PCB (since one hole is a through-trace,
+and I didn't think the solder would flow properly through the
+now-overstuffed hole). You may need to be creative.
+
+Parts list
+----------
+
+All parts came from mouser.com, updated November 2010. Digikey has
+them too. This is < $20 in parts (probably < $15).
+
+qty  p/n			description
+---  ---			-----------
+1    647-UPS1C151MED		150uF capacitor
+1    647-UVZ1E101MED1DU 	100uF capacitor
+1    140-50U5-104M-TB-RC	0.1uF ceramic disc capacitor
+2    71-CCF071K00JKE36		1.0k 1/4w resistor
+1    71-CCF0710K0JKE36		10k 1/4w resistor
+1    696-LDS-A354RI		Lumex 7.6mm common anode 7-segment LED
+1    579-PIC16F628A-I/P		PIC 16f628A, DIP package
+1    534-2460			PC mount AA battery holder
+2    101-0161-EV		Tactile Switch 6x6mm
+1    517-4818-3000-CP		18 pin DIP socket
+1    821-SS12			SMA 1A 20V schottky do-41 diode
+1    652-RLB9012-220KL		22uH 10% 2.4A radial inductor
+1    700-MAX756CSA		Maxim MAX756 step-up power regulator
+
+1    COM-00540 (*)		[from sparkfun.com] 32.768 kHz watch crystal
+2    (*)       			10pF NP0 ceramic disc capacitors
+2    (**)			470nm blue LEDs
+
+(*) For some reason, I thought I wanted the v1.3 PCB to run
+crystal-free from an internal oscillator (a bad idea for a timekeeping
+device). I grabbed the watch crystal from a bag I bought from SparkFun
+at some point, and two 10pF capacitors that I had lying around. (These
+three parts are soldered on the bottom of the PCB, directly against
+the PIC socket pins.) Mouser's 520-ECS-32-12.5-13X crystal is probably
+a good choice. The capacitors should be NP0-type (aka C0G) to avoid
+drifting too much with temperature. 140-50N5-100J-TB-RC is probably a
+good pick.
+
+(**) I didn't order the blue LEDs from Mouser (had them in my junk
+bins), so I can't give a definitive part number. 470nm is
+important. If it's not listed as 470nm, it won't wake you up as well
+(check the datasheet). Brighter is generally better -- but don't get
+carried away. 696-LX100133USBC might be a good choice (800mcd,
+470nm). And conversely, 828-OVLFB3C7 might be a *bad* choice (the
+manufacturer recommends that you not look directly in to the LEDs,
+lest retina damage should occur). READ THE DATASHEET for whatever
+you're about to buy.
+
+
+Assembly
+--------
+
+This is a fairly easy build, aside from my mistakes on the PCB printing.
+
+I'd recommend starting with the surface-mount parts (the MAX756 in
+particular) and then working through the socket; 7-segment LED;
+switches; inductor; capacitors; resistors. The oscillator and its two
+caps should be soldered at the end, along with the LEDs.
+
+If you want one of the switches mounted on the outside of your
+enclosure, you'll want to skip that switch until then end, too.
+
+The LEDs should be connected in parallel.
